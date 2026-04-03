@@ -388,6 +388,39 @@ jobs:
           set -euo pipefail
           bash scripts/upload-s3.sh 2>&1 | tee artifacts/logs/s3-upload.log
 
+      - name: Verify S3 upload succeeded
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
+        run: |
+          set -euo pipefail
+          echo "[INFO] Listing uploaded objects in S3..."
+          aws s3 ls "s3://${S3_BUCKET}/dast/${SCAN_TIMESTAMP}/" --recursive --human-readable || true
+          echo ""
+          echo "[INFO] Checking critical files exist in S3..."
+          MISSING=0
+          for key in \
+            "dast/${SCAN_TIMESTAMP}/final/summary.json" \
+            "dast/${SCAN_TIMESTAMP}/final/summary.pdf"; do
+            if aws s3api head-object --bucket "$S3_BUCKET" --key "$key" > /dev/null 2>&1; then
+              SIZE=$(aws s3api head-object --bucket "$S3_BUCKET" --key "$key" \
+                --query 'ContentLength' --output text)
+              echo "[OK] s3://${S3_BUCKET}/${key} (${SIZE} bytes)"
+            else
+              echo "[WARN] Not found in S3: s3://${S3_BUCKET}/${key}"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          if [ "$MISSING" -gt 0 ]; then
+            echo "[WARN] $MISSING expected file(s) not found in S3 — check s3-upload.log"
+          else
+            echo "[INFO] All critical files confirmed in S3."
+          fi
+
       # ── Slack notification ────────────────────────────────────────────────────
       - name: Send Slack notification
         if: always()
