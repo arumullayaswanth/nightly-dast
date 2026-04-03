@@ -63,17 +63,26 @@ jobs:
       - name: Install Go-based tools (Nuclei, Katana, ffuf)
         uses: actions/setup-go@v5.4.0
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           cache: false
 
       - name: Install Nuclei
         run: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+        env:
+          GOFLAGS: "-mod=mod"
+          GOTOOLCHAIN: "local"
 
       - name: Install Katana
         run: go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+        env:
+          GOFLAGS: "-mod=mod"
+          GOTOOLCHAIN: "local"
 
       - name: Install ffuf
         run: go install -v github.com/ffuf/ffuf/v2@latest
+        env:
+          GOFLAGS: "-mod=mod"
+          GOTOOLCHAIN: "local"
 
       - name: Pull OWASP ZAP Docker image
         run: docker pull ghcr.io/zaproxy/zaproxy:stable
