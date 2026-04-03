@@ -60,12 +60,11 @@ jobs:
         uses: actions/setup-node@v4.4.0
         with:
           node-version: "24"
-          # no cache — project has no package-lock.json
 
       - name: Install Node dependencies
         run: |
           set -euo pipefail
-          npm install --no-fund --no-audit 2>&1
+          npm install -g @playwright/test newman
           npx playwright install chromium --with-deps
 
       - name: Install Go-based tools (Nuclei, Katana, ffuf)
@@ -169,7 +168,7 @@ jobs:
           set -euo pipefail
           ENV_FLAG=""
           [ -n "$NEWMAN_ENV_FILE" ] && ENV_FLAG="-e $NEWMAN_ENV_FILE"
-          npx newman run "$NEWMAN_COLLECTION" $ENV_FLAG \
+          newman run "$NEWMAN_COLLECTION" $ENV_FLAG \
             --reporters cli,json \
             --reporter-json-export artifacts/raw/newman/newman-report.json \
             2>&1 | tee artifacts/logs/newman.log || true
