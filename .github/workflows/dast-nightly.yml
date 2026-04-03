@@ -35,6 +35,7 @@ jobs:
           mkdir -p artifacts/raw/newman
           mkdir -p artifacts/final
           mkdir -p artifacts/logs
+          echo "[INFO] Artifact directories created."
 
       # ── Tool installation ─────────────────────────────────────────────────────
       - name: Install system dependencies
@@ -222,6 +223,7 @@ jobs:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           ENVIRONMENT: ${{ vars.ENVIRONMENT || 'non-production' }}
         run: |
+          mkdir -p artifacts/final
           python3 scripts/normalize-reports.py \
             --zap-report artifacts/raw/zap/zap-report.json \
             --zap-auth-report artifacts/raw/zap/zap-auth-report.json \
@@ -234,13 +236,24 @@ jobs:
             --environment "$ENVIRONMENT" \
             2>&1 | tee artifacts/logs/normalize.log || true
           if [ ! -f "artifacts/final/summary.json" ]; then
-            echo "[WARN] summary.json missing — running fallback"
+            echo "[WARN] normalize-reports.py did not produce summary.json — running fallback"
             python3 scripts/fallback-summary.py \
               "artifacts/final/summary.json" \
               "$SCAN_TIMESTAMP" \
               "$TARGET_URLS" \
-              "$ENVIRONMENT"
+              "$ENVIRONMENT" \
+              2>&1 | tee -a artifacts/logs/normalize.log
           fi
+
+      - name: Validate summary.json exists before PDF generation
+        run: |
+          mkdir -p artifacts/final
+          if [ ! -f "artifacts/final/summary.json" ]; then
+            echo "[ERROR] summary.json was not created by normalize or fallback steps."
+            echo "[ERROR] Check artifacts/logs/normalize.log for details."
+            exit 1
+          fi
+          echo "[INFO] summary.json found ($(wc -c < artifacts/final/summary.json) bytes) — proceeding to PDF generation."
 
       - name: Generate PDF summary report
         env:
