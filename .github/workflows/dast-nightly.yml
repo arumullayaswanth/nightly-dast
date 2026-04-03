@@ -398,10 +398,20 @@ jobs:
           SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
         run: |
           set -euo pipefail
-          echo "[INFO] Listing uploaded objects in S3..."
-          aws s3 ls "s3://${S3_BUCKET}/dast/${SCAN_TIMESTAMP}/" --recursive --human-readable || true
+          echo "=================================================="
+          echo " S3 Artifact Report — dast/${SCAN_TIMESTAMP}/"
+          echo "=================================================="
           echo ""
-          echo "[INFO] Checking critical files exist in S3..."
+
+          # Print every file with size, date and storage class
+          aws s3api list-objects-v2 \
+            --bucket "$S3_BUCKET" \
+            --prefix "dast/${SCAN_TIMESTAMP}/" \
+            --query "Contents[].{File:Key, Size:Size, LastModified:LastModified, StorageClass:StorageClass}" \
+            --output table 2>/dev/null || true
+
+          echo ""
+          echo "--- Critical file check ---"
           MISSING=0
           for key in \
             "dast/${SCAN_TIMESTAMP}/final/summary.json" \
@@ -409,17 +419,22 @@ jobs:
             if aws s3api head-object --bucket "$S3_BUCKET" --key "$key" > /dev/null 2>&1; then
               SIZE=$(aws s3api head-object --bucket "$S3_BUCKET" --key "$key" \
                 --query 'ContentLength' --output text)
-              echo "[OK] s3://${S3_BUCKET}/${key} (${SIZE} bytes)"
+              MODIFIED=$(aws s3api head-object --bucket "$S3_BUCKET" --key "$key" \
+                --query 'LastModified' --output text)
+              echo "[OK] s3://${S3_BUCKET}/${key}"
+              echo "     Size: ${SIZE} bytes | Last Modified: ${MODIFIED}"
             else
-              echo "[WARN] Not found in S3: s3://${S3_BUCKET}/${key}"
+              echo "[WARN] Not found: s3://${S3_BUCKET}/${key}"
               MISSING=$((MISSING + 1))
             fi
           done
-          if [ "$MISSING" -gt 0 ]; then
-            echo "[WARN] $MISSING expected file(s) not found in S3 — check s3-upload.log"
-          else
+          echo ""
+          if [ "$MISSING" -eq 0 ]; then
             echo "[INFO] All critical files confirmed in S3."
+          else
+            echo "[WARN] $MISSING file(s) missing from S3."
           fi
+          echo "=================================================="
 
       # ── Slack notification ────────────────────────────────────────────────────
       - name: Send Slack notification
