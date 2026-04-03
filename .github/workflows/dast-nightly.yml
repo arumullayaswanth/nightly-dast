@@ -58,6 +58,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.22"
+          cache: false
 
       - name: Install Nuclei
         run: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
