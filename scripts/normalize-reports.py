@@ -93,32 +93,52 @@ def parse_nuclei(path: str) -> list[dict]:
     findings = []
     try:
         with open(path) as f:
-            for line in f:
+            raw = f.read().strip()
+
+        if not raw:
+            return []
+
+        # Nuclei can output either a JSON array [...] or JSONL (one object per line)
+        if raw.startswith("["):
+            # JSON array format (--json-export produces this)
+            try:
+                items = json.loads(raw)
+            except json.JSONDecodeError as e:
+                print(f"[WARN] Could not parse Nuclei JSON array {path}: {e}", file=sys.stderr)
+                return []
+        else:
+            # JSONL format — one JSON object per line
+            items = []
+            for line in raw.splitlines():
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    item = json.loads(line)
+                    items.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-                info = item.get("info", {})
-                findings.append({
-                    "id": f"nuclei-{item.get('template-id', 'unknown')}",
-                    "tool": "nuclei",
-                    "authenticated": False,
-                    "title": info.get("name", item.get("template-id", "Unknown")),
-                    "severity": normalise_severity(info.get("severity", "")),
-                    "description": info.get("description", ""),
-                    "solution": info.get("remediation", ""),
-                    "references": "; ".join(info.get("reference", [])),
-                    "affected_urls": [item.get("matched-at", item.get("host", ""))],
-                    "cwe": "; ".join(
-                        c for c in info.get("classification", {}).get("cwe-id", []) if c
-                    ),
-                    "tags": ", ".join(info.get("tags", [])),
-                    "matcher_name": item.get("matcher-name", ""),
-                    "extracted_results": item.get("extracted-results", []),
-                })
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            info = item.get("info", {})
+            findings.append({
+                "id": f"nuclei-{item.get('template-id', 'unknown')}",
+                "tool": "nuclei",
+                "authenticated": False,
+                "title": info.get("name", item.get("template-id", "Unknown")),
+                "severity": normalise_severity(info.get("severity", "")),
+                "description": info.get("description", ""),
+                "solution": info.get("remediation", ""),
+                "references": "; ".join(info.get("reference", [])),
+                "affected_urls": [item.get("matched-at", item.get("host", ""))],
+                "cwe": "; ".join(
+                    c for c in info.get("classification", {}).get("cwe-id", []) if c
+                ),
+                "tags": ", ".join(info.get("tags", [])),
+                "matcher_name": item.get("matcher-name", ""),
+                "extracted_results": item.get("extracted-results", []),
+            })
     except OSError as e:
         print(f"[WARN] Could not read Nuclei report {path}: {e}", file=sys.stderr)
     return findings
