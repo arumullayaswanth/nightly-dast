@@ -7,6 +7,7 @@ on:
 
 env:
   SCAN_TIMESTAMP: "" # set in job step
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   dast-scan:
@@ -20,7 +21,7 @@ jobs:
     steps:
       # ── Setup ────────────────────────────────────────────────────────────────
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set scan timestamp
         run: echo "SCAN_TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_ENV"
@@ -39,10 +40,17 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq curl python3-pip wkhtmltopdf
+          sudo apt-get install -y -qq \
+            jq curl python3-pip wkhtmltopdf \
+            libpango-1.0-0 libpangoft2-1.0-0 libpangocairo-1.0-0 \
+            libgdk-pixbuf2.0-0 libffi-dev shared-mime-info \
+            fonts-liberation fonts-dejavu-core
+
+      - name: Install Python dependencies
+        run: pip install -q requests jinja2 weasyprint
 
       - name: Set up Node.js (Playwright + Newman)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
           node-version: "20"
 
@@ -51,11 +59,8 @@ jobs:
           npm install -g @playwright/test newman
           npx playwright install chromium --with-deps
 
-      - name: Install Python dependencies
-        run: pip install -q requests jinja2 weasyprint
-
       - name: Install Go-based tools (Nuclei, Katana, ffuf)
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.4.0
         with:
           go-version: "1.22"
           cache: false
@@ -227,7 +232,15 @@ jobs:
             --timestamp "$SCAN_TIMESTAMP" \
             --targets "$TARGET_URLS" \
             --environment "$ENVIRONMENT" \
-            2>&1 | tee artifacts/logs/normalize.log
+            2>&1 | tee artifacts/logs/normalize.log || true
+          if [ ! -f "artifacts/final/summary.json" ]; then
+            echo "[WARN] summary.json missing — running fallback"
+            python3 scripts/fallback-summary.py \
+              "artifacts/final/summary.json" \
+              "$SCAN_TIMESTAMP" \
+              "$TARGET_URLS" \
+              "$ENVIRONMENT"
+          fi
 
       - name: Generate PDF summary report
         env:
@@ -237,6 +250,7 @@ jobs:
             --input artifacts/final/summary.json \
             --output artifacts/final/summary.pdf \
             2>&1 | tee artifacts/logs/pdf-gen.log
+        continue-on-error: true
 
       # ── S3 upload ─────────────────────────────────────────────────────────────
       - name: Upload artifacts to S3
@@ -264,7 +278,7 @@ jobs:
       # ── Upload GitHub Actions artifacts ───────────────────────────────────────
       - name: Upload scan artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: dast-artifacts-${{ env.SCAN_TIMESTAMP }}
           path: artifacts/
