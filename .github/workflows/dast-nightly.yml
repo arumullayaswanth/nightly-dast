@@ -24,10 +24,13 @@ jobs:
         uses: actions/checkout@v4.2.2
 
       - name: Set scan timestamp
-        run: echo "SCAN_TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_ENV"
+        run: |
+          set -euo pipefail
+          echo "SCAN_TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_ENV"
 
       - name: Create artifact directories
         run: |
+          set -euo pipefail
           mkdir -p artifacts/raw/zap
           mkdir -p artifacts/raw/nuclei
           mkdir -p artifacts/raw/katana
@@ -40,6 +43,7 @@ jobs:
       # ── Tool installation ─────────────────────────────────────────────────────
       - name: Install system dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             jq curl python3-pip wkhtmltopdf \
@@ -48,7 +52,9 @@ jobs:
             fonts-liberation fonts-dejavu-core
 
       - name: Install Python dependencies
-        run: pip install -q requests jinja2 weasyprint
+        run: |
+          set -euo pipefail
+          pip install -q requests jinja2 weasyprint
 
       - name: Set up Node.js (Playwright + Newman)
         uses: actions/setup-node@v4.4.0
@@ -57,6 +63,7 @@ jobs:
 
       - name: Install Node dependencies
         run: |
+          set -euo pipefail
           npm install -g @playwright/test newman
           npx playwright install chromium --with-deps
 
@@ -85,14 +92,18 @@ jobs:
           GOTOOLCHAIN: "local"
 
       - name: Pull OWASP ZAP Docker image
-        run: docker pull ghcr.io/zaproxy/zaproxy:stable
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/zaproxy/zaproxy:stable
 
       # ── Pre-flight ────────────────────────────────────────────────────────────
       - name: Validate target reachability
         env:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           PREFLIGHT_TIMEOUT: ${{ vars.PREFLIGHT_TIMEOUT || '10' }}
-        run: bash scripts/preflight.sh 2>&1 | tee artifacts/logs/preflight.log
+        run: |
+          set -euo pipefail
+          bash scripts/preflight.sh 2>&1 | tee artifacts/logs/preflight.log
 
       # ── Auth bootstrap (optional) ─────────────────────────────────────────────
       - name: Auth bootstrap (Playwright)
@@ -106,15 +117,17 @@ jobs:
           AUTH_SUBMIT_SELECTOR: ${{ vars.AUTH_SUBMIT_SELECTOR || '[type=submit]' }}
           SESSION_COOKIE_NAME: ${{ vars.SESSION_COOKIE_NAME || 'session' }}
         run: |
+          set -euo pipefail
           node scripts/auth-bootstrap.js 2>&1 | tee artifacts/logs/auth-bootstrap.log
-        continue-on-error: false
 
       # ── Discovery ─────────────────────────────────────────────────────────────
       - name: Endpoint discovery (Katana)
         env:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           KATANA_DEPTH: ${{ vars.KATANA_DEPTH || '3' }}
+        # scan tools use || true intentionally — a scan finding nothing is not a pipeline error
         run: |
+          set -euo pipefail
           for url in $(echo "$TARGET_URLS" | tr ',' '\n'); do
             safe=$(echo "$url" | sed 's|[^a-zA-Z0-9]|_|g')
             ~/go/bin/katana \
@@ -131,6 +144,7 @@ jobs:
           FFUF_WORDLIST: ${{ vars.FFUF_WORDLIST || 'configs/ffuf-wordlist-small.txt' }}
           FFUF_RATE: ${{ vars.FFUF_RATE || '50' }}
         run: |
+          set -euo pipefail
           for url in $(echo "$TARGET_URLS" | tr ',' '\n'); do
             safe=$(echo "$url" | sed 's|[^a-zA-Z0-9]|_|g')
             ~/go/bin/ffuf \
@@ -151,6 +165,7 @@ jobs:
           NEWMAN_ENV_FILE: ${{ vars.NEWMAN_ENV_FILE || '' }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
         run: |
+          set -euo pipefail
           ENV_FLAG=""
           [ -n "$NEWMAN_ENV_FILE" ] && ENV_FLAG="-e $NEWMAN_ENV_FILE"
           newman run "$NEWMAN_COLLECTION" $ENV_FLAG \
@@ -164,6 +179,7 @@ jobs:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           ZAP_AJAX_SPIDER: ${{ vars.ZAP_AJAX_SPIDER || 'false' }}
         run: |
+          set -euo pipefail
           FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
           docker run --rm \
             -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
@@ -184,10 +200,10 @@ jobs:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           ZAP_AUTH_SCRIPT: ${{ vars.ZAP_AUTH_SCRIPT || '' }}
         run: |
+          set -euo pipefail
           FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
-          COOKIE_HEADER=""
           if [ -f /tmp/zap-session.txt ]; then
-            COOKIE_HEADER=$(cat /tmp/zap-session.txt)
+            echo "[INFO] Using session from auth bootstrap."
           fi
           docker run --rm \
             -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
@@ -212,6 +228,7 @@ jobs:
           NUCLEI_SEVERITY: ${{ vars.NUCLEI_SEVERITY || 'medium,high,critical' }}
           NUCLEI_RATE: ${{ vars.NUCLEI_RATE || '50' }}
         run: |
+          set -euo pipefail
           TARGETS_FILE=$(mktemp)
           echo "$TARGET_URLS" | tr ',' '\n' > "$TARGETS_FILE"
           ~/go/bin/nuclei \
@@ -225,6 +242,30 @@ jobs:
             2>&1 | tee artifacts/logs/nuclei.log || true
           rm -f "$TARGETS_FILE"
 
+      # ── Debug: show what raw scan outputs were produced ───────────────────────
+      - name: Debug — list artifact tree
+        if: always()
+        run: ls -R artifacts || true
+
+      # ── Validate raw scan outputs exist ───────────────────────────────────────
+      - name: Validate raw scan outputs
+        run: |
+          set -euo pipefail
+          MISSING=0
+          for f in \
+            artifacts/raw/zap/zap-report.json \
+            artifacts/raw/nuclei/nuclei-report.json; do
+            if [ ! -f "$f" ]; then
+              echo "[WARN] Expected scan output not found: $f"
+              MISSING=$((MISSING + 1))
+            else
+              echo "[OK] $f ($(wc -c < "$f") bytes)"
+            fi
+          done
+          if [ "$MISSING" -gt 0 ]; then
+            echo "[WARN] $MISSING raw scan output(s) missing — pipeline will use fallback summary."
+          fi
+
       # ── Report generation ─────────────────────────────────────────────────────
       - name: Normalize and consolidate reports (summary.json)
         env:
@@ -232,6 +273,7 @@ jobs:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           ENVIRONMENT: ${{ vars.ENVIRONMENT || 'non-production' }}
         run: |
+          set -euo pipefail
           mkdir -p artifacts/final
           python3 scripts/normalize-reports.py \
             --zap-report artifacts/raw/zap/zap-report.json \
@@ -244,6 +286,7 @@ jobs:
             --targets "$TARGET_URLS" \
             --environment "$ENVIRONMENT" \
             2>&1 | tee artifacts/logs/normalize.log || true
+          # Fallback: write empty summary if normalizer crashed or produced nothing
           if [ ! -f "artifacts/final/summary.json" ]; then
             echo "[WARN] normalize-reports.py did not produce summary.json — running fallback"
             python3 scripts/fallback-summary.py \
@@ -256,23 +299,40 @@ jobs:
 
       - name: Validate summary.json exists before PDF generation
         run: |
-          mkdir -p artifacts/final
+          set -euo pipefail
           if [ ! -f "artifacts/final/summary.json" ]; then
             echo "[ERROR] summary.json was not created by normalize or fallback steps."
             echo "[ERROR] Check artifacts/logs/normalize.log for details."
             exit 1
           fi
-          echo "[INFO] summary.json found ($(wc -c < artifacts/final/summary.json) bytes) — proceeding to PDF generation."
+          SIZE=$(wc -c < "artifacts/final/summary.json")
+          echo "[INFO] summary.json found (${SIZE} bytes) — proceeding to PDF generation."
+          # Validate it is parseable JSON
+          if ! jq empty artifacts/final/summary.json 2>/dev/null; then
+            echo "[ERROR] summary.json exists but is not valid JSON."
+            exit 1
+          fi
+          echo "[INFO] summary.json is valid JSON."
 
       - name: Generate PDF summary report
         env:
           SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
         run: |
+          set -euo pipefail
           python3 scripts/generate-pdf.py \
             --input artifacts/final/summary.json \
             --output artifacts/final/summary.pdf \
             2>&1 | tee artifacts/logs/pdf-gen.log
         continue-on-error: true
+
+      # ── Debug: confirm final outputs before upload ────────────────────────────
+      - name: Debug — confirm final outputs
+        if: always()
+        run: |
+          echo "=== artifacts/final ==="
+          ls -lh artifacts/final || true
+          echo "=== artifacts/logs ==="
+          ls -lh artifacts/logs || true
 
       # ── S3 upload ─────────────────────────────────────────────────────────────
       - name: Upload artifacts to S3
@@ -282,7 +342,9 @@ jobs:
           AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
-        run: bash scripts/upload-s3.sh 2>&1 | tee artifacts/logs/s3-upload.log
+        run: |
+          set -euo pipefail
+          bash scripts/upload-s3.sh 2>&1 | tee artifacts/logs/s3-upload.log
 
       # ── Slack notification ────────────────────────────────────────────────────
       - name: Send Slack notification
