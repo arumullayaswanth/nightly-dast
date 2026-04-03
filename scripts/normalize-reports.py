@@ -219,6 +219,7 @@ def main():
     zap_findings = parse_zap(args.zap_report, auth=False)
     print(f"       {len(zap_findings)} findings")
 
+
     print("[INFO] Parsing ZAP authenticated report...")
     zap_auth_findings = parse_zap(args.zap_auth_report, auth=True)
     print(f"       {len(zap_auth_findings)} findings")
