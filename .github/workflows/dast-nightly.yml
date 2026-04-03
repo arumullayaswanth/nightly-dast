@@ -65,7 +65,7 @@ jobs:
       - name: Install Node dependencies
         run: |
           set -euo pipefail
-          npm install 2>&1
+          npm install --no-fund --no-audit 2>&1
           npx playwright install chromium --with-deps
 
       - name: Install Go-based tools (Nuclei, Katana, ffuf)
