@@ -19,7 +19,7 @@
  *   /tmp/auth-token.txt       — Bearer token if found in localStorage/response
  */
 
-const { chromium } = require("playwright");
+const { chromium } = require("@playwright/test");
 const fs = require("fs");
 
 const {

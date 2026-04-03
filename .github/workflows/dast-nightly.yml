@@ -59,12 +59,13 @@ jobs:
       - name: Set up Node.js (Playwright + Newman)
         uses: actions/setup-node@v4.4.0
         with:
-          node-version: "20"
+          node-version: "24"
+          cache: "npm"
 
       - name: Install Node dependencies
         run: |
           set -euo pipefail
-          npm install -g @playwright/test newman
+          npm ci --prefer-offline 2>&1
           npx playwright install chromium --with-deps
 
       - name: Install Go-based tools (Nuclei, Katana, ffuf)
@@ -168,7 +169,7 @@ jobs:
           set -euo pipefail
           ENV_FLAG=""
           [ -n "$NEWMAN_ENV_FILE" ] && ENV_FLAG="-e $NEWMAN_ENV_FILE"
-          newman run "$NEWMAN_COLLECTION" $ENV_FLAG \
+          npx newman run "$NEWMAN_COLLECTION" $ENV_FLAG \
             --reporters cli,json \
             --reporter-json-export artifacts/raw/newman/newman-report.json \
             2>&1 | tee artifacts/logs/newman.log || true
@@ -333,6 +334,48 @@ jobs:
           ls -lh artifacts/final || true
           echo "=== artifacts/logs ==="
           ls -lh artifacts/logs || true
+
+      # ── Validate final artifacts before S3 upload ────────────────────────────
+      - name: Validate final artifacts before S3 upload
+        run: |
+          set -euo pipefail
+          FAILED=0
+
+          echo "[INFO] Checking required final artifacts..."
+
+          if [ ! -f "artifacts/final/summary.json" ]; then
+            echo "[ERROR] Missing: artifacts/final/summary.json"
+            FAILED=$((FAILED + 1))
+          else
+            SIZE=$(wc -c < "artifacts/final/summary.json")
+            if [ "$SIZE" -lt 10 ]; then
+              echo "[ERROR] artifacts/final/summary.json exists but is empty or too small (${SIZE} bytes)"
+              FAILED=$((FAILED + 1))
+            else
+              # Confirm it is valid JSON
+              if ! jq empty artifacts/final/summary.json 2>/dev/null; then
+                echo "[ERROR] artifacts/final/summary.json is not valid JSON"
+                FAILED=$((FAILED + 1))
+              else
+                echo "[OK] artifacts/final/summary.json (${SIZE} bytes, valid JSON)"
+              fi
+            fi
+          fi
+
+          if [ ! -f "artifacts/final/summary.pdf" ]; then
+            echo "[WARN] Missing: artifacts/final/summary.pdf — PDF generation may have failed"
+            echo "[INFO] Pipeline will continue and upload available artifacts."
+          else
+            SIZE=$(wc -c < "artifacts/final/summary.pdf")
+            echo "[OK] artifacts/final/summary.pdf (${SIZE} bytes)"
+          fi
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "[ERROR] $FAILED critical artifact(s) missing or invalid. Aborting S3 upload."
+            exit 1
+          fi
+
+          echo "[INFO] Artifact validation passed — proceeding to S3 upload."
 
       # ── S3 upload ─────────────────────────────────────────────────────────────
       - name: Upload artifacts to S3
