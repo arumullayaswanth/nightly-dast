@@ -1,0 +1,37 @@
+# nuclei-tags.txt
+# Reference list of Nuclei tags used in the nightly scan.
+# The active tag list is controlled via the NUCLEI_TAGS GitHub Actions variable.
+# This file is documentation only.
+
+# Vulnerability classes
+cve
+ssrf
+xss
+sqli
+rce
+lfi
+rfi
+xxe
+ssti
+idor
+open-redirect
+
+# Misconfiguration / exposure
+misconfig
+exposure
+default-login
+panel
+takeover
+cors
+csrf
+
+# Security headers & session
+headers
+session
+cookie
+auth
+
+# API-specific
+api
+graphql
+swagger

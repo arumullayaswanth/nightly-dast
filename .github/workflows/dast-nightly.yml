@@ -1,0 +1,270 @@
+name: Nightly DAST / Pentest Regression
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # 02:00 UTC nightly
+  workflow_dispatch: # allow manual trigger
+
+env:
+  SCAN_TIMESTAMP: "" # set in job step
+
+jobs:
+  dast-scan:
+    name: DAST Regression Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    permissions:
+      contents: read
+
+    steps:
+      # ── Setup ────────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set scan timestamp
+        run: echo "SCAN_TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_ENV"
+
+      - name: Create artifact directories
+        run: |
+          mkdir -p artifacts/raw/zap
+          mkdir -p artifacts/raw/nuclei
+          mkdir -p artifacts/raw/katana
+          mkdir -p artifacts/raw/ffuf
+          mkdir -p artifacts/raw/newman
+          mkdir -p artifacts/final
+          mkdir -p artifacts/logs
+
+      # ── Tool installation ─────────────────────────────────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq curl python3-pip wkhtmltopdf
+
+      - name: Set up Node.js (Playwright + Newman)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: |
+          npm install -g @playwright/test newman
+          npx playwright install chromium --with-deps
+
+      - name: Install Python dependencies
+        run: pip install -q requests jinja2 weasyprint
+
+      - name: Install Go-based tools (Nuclei, Katana, ffuf)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install Nuclei
+        run: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+
+      - name: Install Katana
+        run: go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+
+      - name: Install ffuf
+        run: go install -v github.com/ffuf/ffuf/v2@latest
+
+      - name: Pull OWASP ZAP Docker image
+        run: docker pull ghcr.io/zaproxy/zaproxy:stable
+
+      # ── Pre-flight ────────────────────────────────────────────────────────────
+      - name: Validate target reachability
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          PREFLIGHT_TIMEOUT: ${{ vars.PREFLIGHT_TIMEOUT || '10' }}
+        run: bash scripts/preflight.sh 2>&1 | tee artifacts/logs/preflight.log
+
+      # ── Auth bootstrap (optional) ─────────────────────────────────────────────
+      - name: Auth bootstrap (Playwright)
+        if: ${{ vars.AUTH_ENABLED == 'true' }}
+        env:
+          AUTH_URL: ${{ vars.AUTH_URL }}
+          AUTH_USERNAME: ${{ secrets.AUTH_USERNAME }}
+          AUTH_PASSWORD: ${{ secrets.AUTH_PASSWORD }}
+          AUTH_USERNAME_SELECTOR: ${{ vars.AUTH_USERNAME_SELECTOR || '#username' }}
+          AUTH_PASSWORD_SELECTOR: ${{ vars.AUTH_PASSWORD_SELECTOR || '#password' }}
+          AUTH_SUBMIT_SELECTOR: ${{ vars.AUTH_SUBMIT_SELECTOR || '[type=submit]' }}
+          SESSION_COOKIE_NAME: ${{ vars.SESSION_COOKIE_NAME || 'session' }}
+        run: |
+          node scripts/auth-bootstrap.js 2>&1 | tee artifacts/logs/auth-bootstrap.log
+        continue-on-error: false
+
+      # ── Discovery ─────────────────────────────────────────────────────────────
+      - name: Endpoint discovery (Katana)
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          KATANA_DEPTH: ${{ vars.KATANA_DEPTH || '3' }}
+        run: |
+          for url in $(echo "$TARGET_URLS" | tr ',' '\n'); do
+            safe=$(echo "$url" | sed 's|[^a-zA-Z0-9]|_|g')
+            ~/go/bin/katana \
+              -u "$url" \
+              -d "$KATANA_DEPTH" \
+              -jc \
+              -o "artifacts/raw/katana/${safe}.txt" \
+              -silent 2>&1 | tee -a artifacts/logs/katana.log || true
+          done
+
+      - name: Forced browsing (ffuf)
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          FFUF_WORDLIST: ${{ vars.FFUF_WORDLIST || 'configs/ffuf-wordlist-small.txt' }}
+          FFUF_RATE: ${{ vars.FFUF_RATE || '50' }}
+        run: |
+          for url in $(echo "$TARGET_URLS" | tr ',' '\n'); do
+            safe=$(echo "$url" | sed 's|[^a-zA-Z0-9]|_|g')
+            ~/go/bin/ffuf \
+              -u "${url}/FUZZ" \
+              -w "$FFUF_WORDLIST" \
+              -rate "$FFUF_RATE" \
+              -mc 200,201,204,301,302,403 \
+              -o "artifacts/raw/ffuf/${safe}.json" \
+              -of json \
+              -s 2>&1 | tee -a artifacts/logs/ffuf.log || true
+          done
+
+      # ── Newman API workflow (optional) ────────────────────────────────────────
+      - name: Newman API workflow
+        if: ${{ vars.NEWMAN_COLLECTION != '' }}
+        env:
+          NEWMAN_COLLECTION: ${{ vars.NEWMAN_COLLECTION }}
+          NEWMAN_ENV_FILE: ${{ vars.NEWMAN_ENV_FILE || '' }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+        run: |
+          ENV_FLAG=""
+          [ -n "$NEWMAN_ENV_FILE" ] && ENV_FLAG="-e $NEWMAN_ENV_FILE"
+          newman run "$NEWMAN_COLLECTION" $ENV_FLAG \
+            --reporters cli,json \
+            --reporter-json-export artifacts/raw/newman/newman-report.json \
+            2>&1 | tee artifacts/logs/newman.log || true
+
+      # ── OWASP ZAP DAST ────────────────────────────────────────────────────────
+      - name: OWASP ZAP unauthenticated scan
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          ZAP_AJAX_SPIDER: ${{ vars.ZAP_AJAX_SPIDER || 'false' }}
+        run: |
+          FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
+          docker run --rm \
+            -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
+            -v "$(pwd)/configs/zap-config.yaml:/zap/config.yaml:ro" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-full-scan.py \
+              -t "$FIRST_URL" \
+              -c /zap/config.yaml \
+              -J /zap/wrk/zap-report.json \
+              -r /zap/wrk/zap-report.html \
+              -x /zap/wrk/zap-report.xml \
+              -I \
+              2>&1 | tee artifacts/logs/zap.log || true
+
+      - name: OWASP ZAP authenticated scan
+        if: ${{ vars.AUTH_ENABLED == 'true' }}
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          ZAP_AUTH_SCRIPT: ${{ vars.ZAP_AUTH_SCRIPT || '' }}
+        run: |
+          FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
+          COOKIE_HEADER=""
+          if [ -f /tmp/zap-session.txt ]; then
+            COOKIE_HEADER=$(cat /tmp/zap-session.txt)
+          fi
+          docker run --rm \
+            -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
+            -v "$(pwd)/configs/zap-config.yaml:/zap/config.yaml:ro" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-full-scan.py \
+              -t "$FIRST_URL" \
+              -c /zap/config.yaml \
+              -J /zap/wrk/zap-auth-report.json \
+              -r /zap/wrk/zap-auth-report.html \
+              -I \
+              2>&1 | tee artifacts/logs/zap-auth.log || true
+
+      # ── Nuclei supplemental scan ──────────────────────────────────────────────
+      - name: Update Nuclei templates
+        run: ~/go/bin/nuclei -update-templates -silent 2>&1 | tee artifacts/logs/nuclei-update.log || true
+
+      - name: Nuclei security regression scan
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          NUCLEI_TAGS: ${{ vars.NUCLEI_TAGS || 'cve,ssrf,xss,sqli,rce,misconfig,exposure,headers,session' }}
+          NUCLEI_SEVERITY: ${{ vars.NUCLEI_SEVERITY || 'medium,high,critical' }}
+          NUCLEI_RATE: ${{ vars.NUCLEI_RATE || '50' }}
+        run: |
+          TARGETS_FILE=$(mktemp)
+          echo "$TARGET_URLS" | tr ',' '\n' > "$TARGETS_FILE"
+          ~/go/bin/nuclei \
+            -l "$TARGETS_FILE" \
+            -tags "$NUCLEI_TAGS" \
+            -severity "$NUCLEI_SEVERITY" \
+            -rl "$NUCLEI_RATE" \
+            -json-export artifacts/raw/nuclei/nuclei-report.json \
+            -o artifacts/raw/nuclei/nuclei-report.txt \
+            -silent \
+            2>&1 | tee artifacts/logs/nuclei.log || true
+          rm -f "$TARGETS_FILE"
+
+      # ── Report generation ─────────────────────────────────────────────────────
+      - name: Normalize and consolidate reports (summary.json)
+        env:
+          SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          ENVIRONMENT: ${{ vars.ENVIRONMENT || 'non-production' }}
+        run: |
+          python3 scripts/normalize-reports.py \
+            --zap-report artifacts/raw/zap/zap-report.json \
+            --zap-auth-report artifacts/raw/zap/zap-auth-report.json \
+            --nuclei-report artifacts/raw/nuclei/nuclei-report.json \
+            --ffuf-dir artifacts/raw/ffuf \
+            --katana-dir artifacts/raw/katana \
+            --output artifacts/final/summary.json \
+            --timestamp "$SCAN_TIMESTAMP" \
+            --targets "$TARGET_URLS" \
+            --environment "$ENVIRONMENT" \
+            2>&1 | tee artifacts/logs/normalize.log
+
+      - name: Generate PDF summary report
+        env:
+          SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
+        run: |
+          python3 scripts/generate-pdf.py \
+            --input artifacts/final/summary.json \
+            --output artifacts/final/summary.pdf \
+            2>&1 | tee artifacts/logs/pdf-gen.log
+
+      # ── S3 upload ─────────────────────────────────────────────────────────────
+      - name: Upload artifacts to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
+        run: bash scripts/upload-s3.sh 2>&1 | tee artifacts/logs/s3-upload.log
+
+      # ── Slack notification ────────────────────────────────────────────────────
+      - name: Send Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          ENVIRONMENT: ${{ vars.ENVIRONMENT || 'non-production' }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          JOB_STATUS: ${{ job.status }}
+        run: bash scripts/slack-notify.sh 2>&1 | tee artifacts/logs/slack.log
+
+      # ── Upload GitHub Actions artifacts ───────────────────────────────────────
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-artifacts-${{ env.SCAN_TIMESTAMP }}
+          path: artifacts/
+          retention-days: 30

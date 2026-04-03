@@ -1,0 +1,38 @@
+# ZAP rule tuning
+# zap-config.yaml
+# OWASP ZAP scan configuration for nightly DAST pipeline
+# Reference: https://www.zaproxy.org/docs/docker/full-scan/
+
+# Rules to set to WARN (won't fail the scan but will be reported)
+# Format: id  WARN  (or IGNORE to suppress entirely)
+rules:
+  # Informational / low-noise rules — warn only
+  - id: 10015 # Incomplete or No Cache-control Header
+    action: WARN
+  - id: 10027 # Information Disclosure - Suspicious Comments
+    action: WARN
+  - id: 10096 # Timestamp Disclosure
+    action: WARN
+  - id: 10109 # Modern Web Application
+    action: IGNORE
+  - id: 90022 # Application Error Disclosure
+    action: WARN
+
+  # Security headers — fail on these
+  - id: 10038 # Content Security Policy (CSP) Header Not Set
+    action: WARN
+  - id: 10035 # Strict-Transport-Security Header Not Set
+    action: WARN
+  - id: 10036 # Server Leaks Version Information
+    action: WARN
+  - id: 10021 # X-Content-Type-Options Header Missing
+    action: WARN
+  - id: 10020 # X-Frame-Options Header Not Set
+    action: WARN
+
+  # High severity — keep as FAIL (default)
+  # 40012 Cross Site Scripting (Reflected)
+  # 40014 Cross Site Scripting (Persistent)
+  # 40018 SQL Injection
+  # 40019 SQL Injection - MySQL
+  # 90019 Server Side Include
