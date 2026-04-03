@@ -60,12 +60,12 @@ jobs:
         uses: actions/setup-node@v4.4.0
         with:
           node-version: "24"
-          cache: "npm"
+          cache: "none"
 
       - name: Install Node dependencies
         run: |
           set -euo pipefail
-          npm ci --prefer-offline 2>&1
+          npm install 2>&1
           npx playwright install chromium --with-deps
 
       - name: Install Go-based tools (Nuclei, Katana, ffuf)
