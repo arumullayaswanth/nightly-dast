@@ -33,6 +33,21 @@ SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "u
 def normalise_severity(raw: str) -> str:
     s = (raw or "unknown").lower().strip()
     mapping = {
+        # ZAP risk levels (riskdesc field contains e.g. "High (Medium)")
+        "high (high)": "high",
+        "high (medium)": "high",
+        "high (low)": "high",
+        "medium (high)": "medium",
+        "medium (medium)": "medium",
+        "medium (low)": "medium",
+        "low (high)": "low",
+        "low (medium)": "low",
+        "low (low)": "low",
+        "informational (high)": "info",
+        "informational (medium)": "info",
+        "informational (low)": "info",
+        "informational (informational)": "info",
+        # Plain severity words
         "critical": "critical",
         "high": "high",
         "medium": "medium",
@@ -42,7 +57,11 @@ def normalise_severity(raw: str) -> str:
         "info": "info",
         "false positive": "info",
     }
-    return mapping.get(s, "unknown")
+    # Try full match first, then first word match
+    if s in mapping:
+        return mapping[s]
+    first_word = s.split()[0] if s.split() else s
+    return mapping.get(first_word, "unknown")
 
 
 # ── ZAP parser ────────────────────────────────────────────────────────────────
