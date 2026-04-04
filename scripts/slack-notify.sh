@@ -19,12 +19,13 @@ if [ -n "$S3_BUCKET" ]; then
 fi
 
 # Read findings summary from summary.json if available
-CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; TOTAL=0
+CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; INFO=0; TOTAL=0
 if [ -f "artifacts/final/summary.json" ]; then
   CRITICAL=$(jq -r '.statistics.critical // 0' artifacts/final/summary.json)
   HIGH=$(jq -r '.statistics.high // 0' artifacts/final/summary.json)
   MEDIUM=$(jq -r '.statistics.medium // 0' artifacts/final/summary.json)
   LOW=$(jq -r '.statistics.low // 0' artifacts/final/summary.json)
+  INFO=$(jq -r '.statistics.info // 0' artifacts/final/summary.json)
   TOTAL=$(jq -r '.statistics.total // 0' artifacts/final/summary.json)
 fi
 
@@ -60,6 +61,7 @@ PAYLOAD=$(jq -n \
   --arg high "$HIGH" \
   --arg medium "$MEDIUM" \
   --arg low "$LOW" \
+  --arg info "$INFO" \
   --arg total "$TOTAL" \
   --arg s3_path "$S3_PATH" \
   '{
@@ -72,7 +74,7 @@ PAYLOAD=$(jq -n \
           { title: "Environment",  value: $environment,  short: true },
           { title: "Targets",      value: $targets,      short: false },
           { title: "Findings",
-            value: ("🔴 Critical: " + $critical + "  🟠 High: " + $high + "  🟡 Medium: " + $medium + "  🟢 Low: " + $low + "  📊 Total: " + $total),
+            value: ("🔴 Critical: " + $critical + "  🟠 High: " + $high + "  🟡 Medium: " + $medium + "  🟢 Low: " + $low + "  🔵 Info: " + $info + "  📊 Total: " + $total),
             short: false },
           { title: "S3 Artifacts", value: (if $s3_path != "" then $s3_path else "N/A" end), short: false }
         ],
