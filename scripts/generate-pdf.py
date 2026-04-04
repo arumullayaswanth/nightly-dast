@@ -33,32 +33,34 @@ REPORT_TEMPLATE = """
 <meta charset="UTF-8">
 <title>DAST Security Scan Report — {{ meta.timestamp }}</title>
 <style>
-  body { font-family: Arial, sans-serif; font-size: 12px; color: #222; margin: 40px; }
+  body { font-family: Arial, sans-serif; font-size: 11px; color: #222; margin: 40px; }
   h1 { color: #c0392b; border-bottom: 2px solid #c0392b; padding-bottom: 6px; }
   h2 { color: #2c3e50; margin-top: 30px; }
-  h3 { color: #34495e; margin-top: 20px; font-size: 13px; }
+  h3 { color: #34495e; margin-top: 20px; font-size: 12px; }
   table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  th { background: #2c3e50; color: #fff; padding: 6px 8px; text-align: left; font-size: 11px; }
-  td { padding: 5px 8px; border-bottom: 1px solid #ddd; vertical-align: top; font-size: 11px; }
+  th { background: #2c3e50; color: #fff; padding: 6px 8px; text-align: left; font-size: 10px; }
+  td { padding: 5px 8px; border-bottom: 1px solid #ddd; vertical-align: top; font-size: 10px; }
   tr:nth-child(even) { background: #f9f9f9; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold;
-           font-size: 10px; text-transform: uppercase; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: bold;
+           font-size: 9px; text-transform: uppercase; }
   .critical { background: #c0392b; color: #fff; }
   .high     { background: #e67e22; color: #fff; }
   .medium   { background: #f1c40f; color: #333; }
   .low      { background: #27ae60; color: #fff; }
   .info     { background: #2980b9; color: #fff; }
   .unknown  { background: #95a5a6; color: #fff; }
-  .stat-box { display: inline-block; width: 90px; text-align: center; padding: 10px;
-              margin: 5px; border-radius: 5px; }
-  .stat-num { font-size: 24px; font-weight: bold; }
-  .stat-lbl { font-size: 10px; text-transform: uppercase; }
+  .stat-box { display: inline-block; width: 80px; text-align: center; padding: 8px;
+              margin: 4px; border-radius: 5px; }
+  .stat-num { font-size: 22px; font-weight: bold; }
+  .stat-lbl { font-size: 9px; text-transform: uppercase; }
   .meta-table td { border: none; padding: 3px 8px; }
   .finding-block { border: 1px solid #ddd; border-radius: 4px; padding: 10px;
                    margin-bottom: 12px; page-break-inside: avoid; }
-  .url-list { font-family: monospace; font-size: 10px; color: #555; }
+  .url-list { font-family: monospace; font-size: 9px; color: #555; }
+  .desc-cell { max-width: 200px; word-wrap: break-word; }
   .section-divider { border: none; border-top: 1px solid #eee; margin: 20px 0; }
-  @page { margin: 2cm; }
+  .tool-table td { font-size: 11px; padding: 5px 10px; }
+  @page { margin: 1.5cm; size: A4 landscape; }
 </style>
 </head>
 <body>
@@ -75,30 +77,39 @@ REPORT_TEMPLATE = """
 
 <h2>Executive Summary</h2>
 
-<div>
-  <div class="stat-box critical">
-    <div class="stat-num">{{ stats.critical }}</div>
-    <div class="stat-lbl">Critical</div>
-  </div>
-  <div class="stat-box high">
-    <div class="stat-num">{{ stats.high }}</div>
-    <div class="stat-lbl">High</div>
-  </div>
-  <div class="stat-box medium">
-    <div class="stat-num">{{ stats.medium }}</div>
-    <div class="stat-lbl">Medium</div>
-  </div>
-  <div class="stat-box low">
-    <div class="stat-num">{{ stats.low }}</div>
-    <div class="stat-lbl">Low</div>
-  </div>
-  <div class="stat-box info">
-    <div class="stat-num">{{ stats.info }}</div>
-    <div class="stat-lbl">Info</div>
-  </div>
+{% if meta.zap_status and not meta.zap_status.completed %}
+<div style="background:#fff3cd; border:1px solid #ffc107; border-radius:4px; padding:12px; margin:10px 0;">
+  <strong>⚠️ ZAP Scan Incomplete</strong><br>
+  <strong>Reason:</strong> {{ meta.zap_status.reason }}<br>
+  <strong>Target:</strong> {{ meta.zap_status.target }}<br>
+  <em>See the diagnostic finding below for details and recommended fix.</em>
 </div>
+{% endif %}
 
+<div>
+  <div class="stat-box critical"><div class="stat-num">{{ stats.critical }}</div><div class="stat-lbl">Critical</div></div>
+  <div class="stat-box high"><div class="stat-num">{{ stats.high }}</div><div class="stat-lbl">High</div></div>
+  <div class="stat-box medium"><div class="stat-num">{{ stats.medium }}</div><div class="stat-lbl">Medium</div></div>
+  <div class="stat-box low"><div class="stat-num">{{ stats.low }}</div><div class="stat-lbl">Low</div></div>
+  <div class="stat-box info"><div class="stat-num">{{ stats.info }}</div><div class="stat-lbl">Info</div></div>
+</div>
 <p><strong>Total findings: {{ stats.total }}</strong></p>
+
+<h2>Tools Summary</h2>
+<table class="tool-table">
+  <thead>
+    <tr><th>Tool</th><th>Findings</th><th>Scanned URL(s)</th></tr>
+  </thead>
+  <tbody>
+  {% for tool, count in tool_counts.items() %}
+    <tr>
+      <td>{{ tool }}</td>
+      <td><strong>{{ count }}</strong></td>
+      <td class="url-list">{{ meta.targets | join(", ") }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 
 {% if critical_and_high %}
 <h2>Critical &amp; High Severity Findings</h2>
@@ -109,9 +120,11 @@ REPORT_TEMPLATE = """
     &nbsp;{{ f.title }}
     <small style="color:#888; font-weight:normal;">[{{ f.tool }}{% if f.authenticated %} / authenticated{% endif %}]</small>
   </h3>
-  {% if f.description %}<p>{{ f.description }}</p>{% endif %}
+  {% if f.description %}<p><strong>Description:</strong> {{ f.description }}</p>{% endif %}
   {% if f.solution %}<p><strong>Remediation:</strong> {{ f.solution }}</p>{% endif %}
   {% if f.cwe %}<p><strong>CWE:</strong> {{ f.cwe }}</p>{% endif %}
+  {% if f.get('cve') %}<p><strong>CVE:</strong> {{ f.cve }}</p>{% endif %}
+  {% if f.references %}<p><strong>References:</strong> {{ f.references }}</p>{% endif %}
   {% if f.affected_urls %}
   <p><strong>Affected URLs:</strong></p>
   <div class="url-list">
@@ -125,7 +138,7 @@ REPORT_TEMPLATE = """
 
 <hr class="section-divider">
 
-<h2>All Findings by Severity</h2>
+<h2>All Findings</h2>
 <table>
   <thead>
     <tr>
@@ -135,6 +148,9 @@ REPORT_TEMPLATE = """
       <th>Auth</th>
       <th>Affected URLs (sample)</th>
       <th>CWE</th>
+      <th>CVE</th>
+      <th>Description</th>
+      <th>Remediation</th>
     </tr>
   </thead>
   <tbody>
@@ -149,13 +165,16 @@ REPORT_TEMPLATE = """
         {% if f.affected_urls | length > 3 %}+{{ f.affected_urls | length - 3 }} more{% endif %}
       </td>
       <td>{{ f.cwe or "—" }}</td>
+      <td>{{ f.get("cve", "—") }}</td>
+      <td class="desc-cell">{{ (f.description or "—")[:200] }}{% if (f.description or "") | length > 200 %}...{% endif %}</td>
+      <td class="desc-cell">{{ (f.solution or "—")[:200] }}{% if (f.solution or "") | length > 200 %}...{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 
 <hr class="section-divider">
-<p style="color:#aaa; font-size:10px; text-align:center;">
+<p style="color:#aaa; font-size:9px; text-align:center;">
   Generated by DAST Nightly Pipeline &mdash; {{ meta.generated_at }} &mdash;
   For approved non-production targets only.
 </p>
@@ -184,6 +203,12 @@ def main():
 
     critical_and_high = [f for f in findings if f.get("severity") in ("critical", "high")]
 
+    # Count findings per tool for the Tools Summary table
+    tool_counts = {}
+    for f in findings:
+        tool = f.get("tool", "unknown")
+        tool_counts[tool] = tool_counts.get(tool, 0) + 1
+
     env = Environment(loader=BaseLoader())
     template = env.from_string(REPORT_TEMPLATE)
     html_content = template.render(
@@ -191,6 +216,7 @@ def main():
         stats=stats,
         findings=findings,
         critical_and_high=critical_and_high,
+        tool_counts=tool_counts,
     )
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)

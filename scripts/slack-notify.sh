@@ -20,6 +20,7 @@ fi
 
 # Read findings summary from summary.json if available
 CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; INFO=0; TOTAL=0
+ZAP_COUNT=0; NUCLEI_COUNT=0; FFUF_COUNT=0; KATANA_COUNT=0; NEWMAN_COUNT=0
 if [ -f "artifacts/final/summary.json" ]; then
   CRITICAL=$(jq -r '.statistics.critical // 0' artifacts/final/summary.json)
   HIGH=$(jq -r '.statistics.high // 0' artifacts/final/summary.json)
@@ -27,7 +28,15 @@ if [ -f "artifacts/final/summary.json" ]; then
   LOW=$(jq -r '.statistics.low // 0' artifacts/final/summary.json)
   INFO=$(jq -r '.statistics.info // 0' artifacts/final/summary.json)
   TOTAL=$(jq -r '.statistics.total // 0' artifacts/final/summary.json)
+  ZAP_COUNT=$(jq -r '[.findings[] | select(.tool=="zap")] | length' artifacts/final/summary.json)
+  NUCLEI_COUNT=$(jq -r '[.findings[] | select(.tool=="nuclei")] | length' artifacts/final/summary.json)
+  FFUF_COUNT=$(jq -r '[.findings[] | select(.tool=="ffuf")] | length' artifacts/final/summary.json)
+  KATANA_COUNT=$(jq -r '[.findings[] | select(.tool=="katana")] | length' artifacts/final/summary.json)
+  NEWMAN_COUNT=$(jq -r '[.findings[] | select(.tool=="newman")] | length' artifacts/final/summary.json)
 fi
+
+# Build tools summary line
+TOOLS_SUMMARY="🔍 OWASP ZAP: ${ZAP_COUNT}  |  ☢️ Nuclei: ${NUCLEI_COUNT}  |  🌐 Katana: ${KATANA_COUNT}  |  💥 ffuf: ${FFUF_COUNT}  |  📬 Newman: ${NEWMAN_COUNT}"
 
 # Choose emoji and color based on job status and findings
 if [ "$JOB_STATUS" = "success" ]; then
@@ -63,6 +72,7 @@ PAYLOAD=$(jq -n \
   --arg low "$LOW" \
   --arg info "$INFO" \
   --arg total "$TOTAL" \
+  --arg tools "$TOOLS_SUMMARY" \
   --arg s3_path "$S3_PATH" \
   '{
     attachments: [
@@ -70,11 +80,14 @@ PAYLOAD=$(jq -n \
         color: $color,
         title: ($status_emoji + " DAST Nightly Scan — " + $status_text),
         fields: [
-          { title: "Timestamp",    value: $timestamp,    short: true },
-          { title: "Environment",  value: $environment,  short: true },
-          { title: "Targets",      value: $targets,      short: false },
-          { title: "Findings",
+          { title: "Timestamp",    value: $timestamp,   short: true },
+          { title: "Environment",  value: $environment, short: true },
+          { title: "Scanned URL(s)", value: $targets,   short: false },
+          { title: "Severity Breakdown",
             value: ("🔴 Critical: " + $critical + "  🟠 High: " + $high + "  🟡 Medium: " + $medium + "  🟢 Low: " + $low + "  🔵 Info: " + $info + "  📊 Total: " + $total),
+            short: false },
+          { title: "Tools & Findings",
+            value: $tools,
             short: false },
           { title: "S3 Artifacts", value: (if $s3_path != "" then $s3_path else "N/A" end), short: false }
         ],
