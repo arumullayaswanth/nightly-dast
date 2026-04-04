@@ -26,6 +26,14 @@ from datetime import datetime, timezone
 
 FAILURE_PATTERNS = [
     (
+        r"target must start with|must start with 'http",
+        "Invalid Target URL — Missing Protocol",
+        "The target URL is missing the 'https://' or 'http://' prefix. "
+        "ZAP requires a full URL including the protocol.",
+        "Update the TARGET_URLS GitHub Actions variable to include the protocol. "
+        "Example: https://www.example.com instead of www.example.com",
+    ),
+    (
         r"cloudflare|cf-ray|attention required|ddos protection",
         "Cloudflare / WAF Protection",
         "The target is protected by Cloudflare or a Web Application Firewall (WAF). "
