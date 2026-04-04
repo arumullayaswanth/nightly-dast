@@ -181,6 +181,9 @@ jobs:
         run: |
           set -euo pipefail
           FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
+          # Fix permissions so ZAP container (runs as uid 1000) can write reports
+          mkdir -p artifacts/raw/zap
+          chmod 777 artifacts/raw/zap
           docker run --rm \
             -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
             -v "$(pwd)/configs/zap-config.yaml:/zap/config.yaml:ro" \
@@ -202,6 +205,9 @@ jobs:
         run: |
           set -euo pipefail
           FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
+          # Fix permissions so ZAP container (runs as uid 1000) can write reports
+          mkdir -p artifacts/raw/zap
+          chmod 777 artifacts/raw/zap
           if [ -f /tmp/zap-session.txt ]; then
             echo "[INFO] Using session from auth bootstrap."
           fi
