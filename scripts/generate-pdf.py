@@ -98,13 +98,14 @@ REPORT_TEMPLATE = """
 <h2>Tools Summary</h2>
 <table class="tool-table">
   <thead>
-    <tr><th>Tool</th><th>Findings</th><th>Scanned URL(s)</th></tr>
+    <tr><th>Tool</th><th>Findings</th><th>Status</th><th>Scanned URL(s)</th></tr>
   </thead>
   <tbody>
   {% for tool, count in tool_counts.items() %}
     <tr>
       <td>{{ tool }}</td>
       <td><strong>{{ count }}</strong></td>
+      <td>{% if count > 0 %}✅ Findings detected{% else %}✔ No findings detected{% endif %}</td>
       <td class="url-list">{{ meta.targets | join(", ") }}</td>
     </tr>
   {% endfor %}
@@ -203,11 +204,19 @@ def main():
 
     critical_and_high = [f for f in findings if f.get("severity") in ("critical", "high")]
 
-    # Count findings per tool for the Tools Summary table
-    tool_counts = {}
+    # Always show all pipeline tools, even if they found 0 findings
+    ALL_TOOLS = {
+        "zap":     "OWASP ZAP (DAST Scanner)",
+        "nuclei":  "Nuclei (Security Regression)",
+        "katana":  "Katana (Endpoint Discovery)",
+        "ffuf":    "ffuf (Forced Browsing)",
+        "newman":  "Newman (API Workflow)",
+    }
+    tool_counts = {label: 0 for label in ALL_TOOLS.values()}
     for f in findings:
         tool = f.get("tool", "unknown")
-        tool_counts[tool] = tool_counts.get(tool, 0) + 1
+        label = ALL_TOOLS.get(tool, tool)
+        tool_counts[label] = tool_counts.get(label, 0) + 1
 
     env = Environment(loader=BaseLoader())
     template = env.from_string(REPORT_TEMPLATE)
