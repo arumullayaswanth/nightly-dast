@@ -38,7 +38,9 @@ jobs:
           mkdir -p artifacts/raw/newman
           mkdir -p artifacts/final
           mkdir -p artifacts/logs
-          echo "[INFO] Artifact directories created."
+          # Set open permissions so ZAP Docker container (uid 1000) can write to all dirs
+          chmod -R 777 artifacts/
+          echo "[INFO] Artifact directories created with open permissions."
 
       # ── Tool installation ─────────────────────────────────────────────────────
       - name: Install system dependencies
@@ -196,6 +198,20 @@ jobs:
               -x /zap/wrk/zap-report.xml \
               -I \
               2>&1 | tee artifacts/logs/zap.log || true
+          echo "--- ZAP output files ---"
+          ls -lh artifacts/raw/zap/ || echo "No ZAP output files produced"
+          echo "--- ZAP log tail ---"
+          tail -20 artifacts/logs/zap.log || true
+          echo "--- ZAP JSON structure check ---"
+          if [ -f "artifacts/raw/zap/zap-report.json" ]; then
+            echo "[OK] zap-report.json exists ($(wc -c < artifacts/raw/zap/zap-report.json) bytes)"
+            jq '{sites: (.site | length), alerts: (.site[0].alerts | length)}' \
+              artifacts/raw/zap/zap-report.json 2>/dev/null || \
+            jq 'keys' artifacts/raw/zap/zap-report.json 2>/dev/null || \
+            echo "[WARN] Could not parse zap-report.json structure"
+          else
+            echo "[WARN] zap-report.json was NOT created"
+          fi
 
       - name: OWASP ZAP authenticated scan
         if: ${{ vars.AUTH_ENABLED == 'true' }}
@@ -222,6 +238,21 @@ jobs:
               -r /zap/wrk/zap-auth-report.html \
               -I \
               2>&1 | tee artifacts/logs/zap-auth.log || true
+
+      # ── ZAP diagnostic (runs when ZAP produces no reports) ───────────────────
+      - name: ZAP scan diagnosis
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+        run: |
+          set -euo pipefail
+          FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
+          mkdir -p artifacts/final
+          python3 scripts/zap-diagnose.py \
+            --zap-log artifacts/logs/zap.log \
+            --zap-dir artifacts/raw/zap \
+            --summary artifacts/final/summary.json \
+            --target "$FIRST_URL" \
+            2>&1 | tee artifacts/logs/zap-diagnose.log || true
 
       # ── Nuclei supplemental scan ──────────────────────────────────────────────
       - name: Update Nuclei templates

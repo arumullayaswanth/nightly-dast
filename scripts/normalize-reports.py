@@ -77,30 +77,56 @@ def parse_zap(path: str, auth: bool = False) -> list[dict]:
         return []
 
     findings = []
-    sites = data.get("site", [])
+
+    # ZAP JSON can have site as a list, a single dict, or nested under "@version"
+    sites = data.get("site", data.get("@version", []))
     if isinstance(sites, dict):
         sites = [sites]
+    elif not isinstance(sites, list):
+        sites = []
+
+    # Also handle flat alerts at top level (some ZAP versions)
+    top_alerts = data.get("alerts", [])
+    if top_alerts:
+        sites = [{"alerts": top_alerts}]
 
     for site in sites:
-        for alert in site.get("alerts", []):
-            severity = normalise_severity(alert.get("riskdesc", ""))
-            instances = alert.get("instances", [])
-            urls = list({i.get("uri", "") for i in instances if i.get("uri")})
+        alerts = site.get("alerts", site.get("alert", []))
+        if isinstance(alerts, dict):
+            alerts = [alerts]
+        for alert in alerts:
+            severity = normalise_severity(alert.get("riskdesc", alert.get("risk", "")))
+            instances = alert.get("instances", alert.get("instance", []))
+            if isinstance(instances, dict):
+                instances = [instances]
+            urls = list({i.get("uri", i.get("url", "")) for i in instances if i.get("uri") or i.get("url")})
+            if not urls:
+                uri = alert.get("uri", alert.get("url", ""))
+                if uri:
+                    urls = [uri]
+            # Extract CVE from tags if present
+            cve = ""
+            for tag in alert.get("tags", {}).values() if isinstance(alert.get("tags"), dict) else []:
+                if isinstance(tag, str) and tag.startswith("CVE-"):
+                    cve = tag
+                    break
             findings.append({
-                "id": f"zap-{alert.get('pluginid', 'unknown')}",
+                "id": f"zap-{alert.get('pluginid', alert.get('id', 'unknown'))}",
                 "tool": "zap",
                 "authenticated": auth,
-                "title": alert.get("alert", "Unknown"),
+                "title": alert.get("alert", alert.get("name", "Unknown")),
                 "severity": severity,
-                "description": alert.get("desc", ""),
-                "solution": alert.get("solution", ""),
-                "references": alert.get("reference", ""),
+                "description": alert.get("desc", alert.get("description", "")),
+                "solution": alert.get("solution", alert.get("remedy", "")),
+                "references": alert.get("reference", alert.get("references", "")),
                 "affected_urls": urls,
-                "cwe": alert.get("cweid", ""),
+                "cwe": alert.get("cweid", alert.get("cwe", "")),
+                "cve": cve,
                 "wasc": alert.get("wascid", ""),
                 "confidence": alert.get("confidence", ""),
                 "count": alert.get("count", len(instances)),
             })
+    print(f"[INFO] ZAP parser: {len(findings)} findings from {path}", file=sys.stderr)
     return findings
 
 
