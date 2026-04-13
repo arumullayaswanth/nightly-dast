@@ -139,3 +139,116 @@ s3://<S3_BUCKET>/dast/<TIMESTAMP>/
   ]
 }
 ```
+
+---
+
+## Phase 2 — Authorization Matrix
+
+| Variable / Secret | Default | Description |
+|---|---|---|
+| `USER_TOKEN` *(secret)* | — | Bearer token for standard authenticated user role |
+| `ADMIN_TOKEN` *(secret)* | — | Bearer token for admin/privileged user role |
+| `AUTHZ_ENDPOINTS` | see script | Comma-separated endpoint paths to test (e.g. `/api/users,/api/admin`) |
+
+The authz matrix tests each endpoint against three roles: anonymous, user, and admin. It detects:
+- Unauthenticated access to protected endpoints (IDOR/BOLA)
+- Privilege escalation (user accessing admin endpoints)
+- Missing access controls
+
+---
+
+## Phase 2 — Rate Limit Testing
+
+| Variable | Default | Description |
+|---|---|---|
+| `RATE_BURST_COUNT` | `20` | Number of rapid requests to send per test |
+| `LOGIN_PATH` | `/api/auth/login` | Login endpoint path to test for throttling |
+| `RESET_PATH` | `/api/auth/reset` | Password reset endpoint path |
+| `SIGNUP_PATH` | `/api/auth/register` | Signup/registration endpoint path |
+| `API_TEST_PATH` | `/api/users` | API endpoint to burst test |
+
+The rate limit suite sends rapid bursts to each endpoint and checks for:
+- HTTP 429 responses
+- `Retry-After` header presence
+- `X-RateLimit-*` header presence
+
+---
+
+## Phase 2 — Regression Diff
+
+No additional variables required. The regression diff step uses the existing `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`, and `AWS_REGION` to fetch the prior run from S3 automatically.
+
+The IAM policy must include `s3:ListBucket` and `s3:GetObject` in addition to `s3:PutObject`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectAcl",
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-security-artifacts",
+        "arn:aws:s3:::my-security-artifacts/dast/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+---
+
+## Updated Artifact Structure in S3 (Phase 1 + Phase 2)
+
+```
+s3://<S3_BUCKET>/dast/<TIMESTAMP>/
+  raw/
+    zap/
+      zap-report.json
+      zap-report.html
+      zap-report.xml
+      zap-auth-report.json      # only if AUTH_ENABLED=true
+      zap-auth-report.html
+    nuclei/
+      nuclei-report.json
+      nuclei-report.txt
+    katana/
+      <target>.txt
+    ffuf/
+      <target>.json
+    newman/
+      newman-report.json        # only if NEWMAN_COLLECTION is set
+    authz/
+      authz-matrix.json         # Phase 2 — authorization matrix results
+    rate-limit/
+      rate-limit-results.json   # Phase 2 — rate limit test results
+  final/
+    summary.json                # consolidated findings (all tools)
+    summary.pdf                 # human-readable PDF report
+  logs/
+    preflight.log
+    auth-bootstrap.log
+    katana.log
+    ffuf.log
+    zap.log
+    zap-auth.log
+    nuclei.log
+    authz-matrix.log            # Phase 2
+    rate-limit.log              # Phase 2
+    regression-diff.log         # Phase 2
+    normalize.log
+    posture.log
+    pdf-gen.log
+    s3-upload.log
+    slack.log
+```
