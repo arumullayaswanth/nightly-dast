@@ -221,15 +221,32 @@ jobs:
         run: |
           set -euo pipefail
           FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
-          # Fix permissions so ZAP container (runs as uid 1000) can write reports
           mkdir -p artifacts/raw/zap
           chmod 777 artifacts/raw/zap
-          if [ -f /tmp/zap-session.txt ]; then
-            echo "[INFO] Using session from auth bootstrap."
+
+          # Build cookie/token args from Playwright auth bootstrap output
+          ZAP_REPLACE_HEADER=""
+          if [ -f /tmp/auth-token.txt ]; then
+            TOKEN=$(cat /tmp/auth-token.txt)
+            ZAP_REPLACE_HEADER="-z \"-config replacer.full_list(0).description=auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Authorization -config replacer.full_list(0).replacement=Bearer\\ ${TOKEN}\""
+            echo "[INFO] Using Bearer token from auth bootstrap for authenticated ZAP scan."
+          elif [ -f /tmp/zap-session.txt ]; then
+            COOKIE=$(cat /tmp/zap-session.txt)
+            ZAP_REPLACE_HEADER="-z \"-config replacer.full_list(0).description=session -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).replacement=${COOKIE}\""
+            echo "[INFO] Using session cookie from auth bootstrap for authenticated ZAP scan."
+          else
+            echo "[WARN] No auth token or session cookie found — authenticated scan will run without credentials."
           fi
-          docker run --rm \
+
+          # Mount auth files into container if they exist
+          MOUNT_ARGS=""
+          [ -f /tmp/session-cookies.json ] && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/session-cookies.json:/tmp/session-cookies.json:ro"
+          [ -f /tmp/auth-token.txt ] && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/auth-token.txt:/tmp/auth-token.txt:ro"
+
+          eval docker run --rm \
             -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
             -v "$(pwd)/configs/zap-config.yaml:/zap/config.yaml:ro" \
+            $MOUNT_ARGS \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-full-scan.py \
               -t "$FIRST_URL" \
@@ -237,6 +254,7 @@ jobs:
               -J /zap/wrk/zap-auth-report.json \
               -r /zap/wrk/zap-auth-report.html \
               -I \
+              $ZAP_REPLACE_HEADER \
               2>&1 | tee artifacts/logs/zap-auth.log || true
 
       # ── ZAP diagnostic (runs when ZAP produces no reports) ───────────────────
@@ -309,6 +327,7 @@ jobs:
           SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           ENVIRONMENT: ${{ vars.ENVIRONMENT || 'non-production' }}
+          AUTH_ENABLED: ${{ vars.AUTH_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p artifacts/final
@@ -318,10 +337,12 @@ jobs:
             --nuclei-report artifacts/raw/nuclei/nuclei-report.json \
             --ffuf-dir artifacts/raw/ffuf \
             --katana-dir artifacts/raw/katana \
+            --newman-report artifacts/raw/newman/newman-report.json \
             --output artifacts/final/summary.json \
             --timestamp "$SCAN_TIMESTAMP" \
             --targets "$TARGET_URLS" \
             --environment "$ENVIRONMENT" \
+            --auth-enabled "${AUTH_ENABLED:-false}" \
             2>&1 | tee artifacts/logs/normalize.log || true
           # Fallback: write empty summary if normalizer crashed or produced nothing
           if [ ! -f "artifacts/final/summary.json" ]; then
@@ -344,12 +365,25 @@ jobs:
           fi
           SIZE=$(wc -c < "artifacts/final/summary.json")
           echo "[INFO] summary.json found (${SIZE} bytes) — proceeding to PDF generation."
-          # Validate it is parseable JSON
           if ! jq empty artifacts/final/summary.json 2>/dev/null; then
             echo "[ERROR] summary.json exists but is not valid JSON."
             exit 1
           fi
-          echo "[INFO] summary.json is valid JSON."
+          # Hard fail if fallback summary was used
+          IS_FALLBACK=$(jq -r '.scan_metadata.is_fallback // false' artifacts/final/summary.json)
+          if [ "$IS_FALLBACK" = "true" ]; then
+            echo "[ERROR] Fallback summary was used — all scan tools produced no output."
+            echo "[ERROR] Pipeline will not silently succeed with zero-finding fallback data."
+            exit 1
+          fi
+          echo "[INFO] summary.json is valid and not a fallback — proceeding."
+
+      - name: Calculate posture score
+        run: |
+          set -euo pipefail
+          python3 scripts/posture-score.py \
+            --summary artifacts/final/summary.json \
+            2>&1 | tee artifacts/logs/posture.log
 
       - name: Generate PDF summary report
         env:

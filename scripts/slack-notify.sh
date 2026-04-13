@@ -21,6 +21,9 @@ fi
 # Read findings summary from summary.json if available
 CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; INFO=0; TOTAL=0
 ZAP_COUNT=0; NUCLEI_COUNT=0; FFUF_COUNT=0; KATANA_COUNT=0; NEWMAN_COUNT=0
+POSTURE_SCORE="N/A"; COVERAGE="N/A"; RISK_LEVEL="UNKNOWN"
+IS_FALLBACK="false"; AUTH_STATUS="not_run"; ZAP_AUTH_STATUS="not_run"
+
 if [ -f "artifacts/final/summary.json" ]; then
   CRITICAL=$(jq -r '.statistics.critical // 0' artifacts/final/summary.json)
   HIGH=$(jq -r '.statistics.high // 0' artifacts/final/summary.json)
@@ -33,10 +36,25 @@ if [ -f "artifacts/final/summary.json" ]; then
   FFUF_COUNT=$(jq -r '[.findings[] | select(.tool=="ffuf")] | length' artifacts/final/summary.json)
   KATANA_COUNT=$(jq -r '[.findings[] | select(.tool=="katana")] | length' artifacts/final/summary.json)
   NEWMAN_COUNT=$(jq -r '[.findings[] | select(.tool=="newman")] | length' artifacts/final/summary.json)
+  POSTURE_SCORE=$(jq -r '.posture.posture_score // "N/A"' artifacts/final/summary.json)
+  COVERAGE=$(jq -r '.posture.coverage_confidence // "N/A"' artifacts/final/summary.json)
+  RISK_LEVEL=$(jq -r '.posture.risk_level // "UNKNOWN"' artifacts/final/summary.json)
+  IS_FALLBACK=$(jq -r '.scan_metadata.is_fallback // false' artifacts/final/summary.json)
+  AUTH_STATUS=$(jq -r '.scan_metadata.stage_flags.auth_bootstrap // "not_run"' artifacts/final/summary.json)
+  ZAP_AUTH_STATUS=$(jq -r '.scan_metadata.stage_flags.zap_auth // "not_run"' artifacts/final/summary.json)
 fi
 
 # Build tools summary line
-TOOLS_SUMMARY="🔍 OWASP ZAP: ${ZAP_COUNT}  |  ☢️ Nuclei: ${NUCLEI_COUNT}  |  🌐 Katana: ${KATANA_COUNT}  |  💥 ffuf: ${FFUF_COUNT}  |  📬 Newman: ${NEWMAN_COUNT}"
+TOOLS_SUMMARY="🔍 ZAP: ${ZAP_COUNT}  |  ☢️ Nuclei: ${NUCLEI_COUNT}  |  🌐 Katana: ${KATANA_COUNT}  |  💥 ffuf: ${FFUF_COUNT}  |  📬 Newman: ${NEWMAN_COUNT}"
+
+# Fallback warning
+FALLBACK_NOTE=""
+if [ "$IS_FALLBACK" = "true" ]; then
+  FALLBACK_NOTE="⚠️ FALLBACK SUMMARY USED — scan tools produced no output"
+fi
+
+# Auth coverage status
+AUTH_NOTE="Auth Bootstrap: ${AUTH_STATUS} | ZAP Auth Scan: ${ZAP_AUTH_STATUS}"
 
 # Choose emoji and color based on job status and findings
 if [ "$JOB_STATUS" = "success" ]; then
@@ -73,6 +91,11 @@ PAYLOAD=$(jq -n \
   --arg info "$INFO" \
   --arg total "$TOTAL" \
   --arg tools "$TOOLS_SUMMARY" \
+  --arg posture "$POSTURE_SCORE" \
+  --arg coverage "$COVERAGE" \
+  --arg risk "$RISK_LEVEL" \
+  --arg auth_note "$AUTH_NOTE" \
+  --arg fallback_note "$FALLBACK_NOTE" \
   --arg s3_path "$S3_PATH" \
   '{
     attachments: [
@@ -80,17 +103,15 @@ PAYLOAD=$(jq -n \
         color: $color,
         title: ($status_emoji + " DAST Nightly Scan — " + $status_text),
         fields: [
-          { title: "Timestamp",    value: $timestamp,   short: true },
-          { title: "Environment",  value: $environment, short: true },
-          { title: "Scanned URL(s)", value: $targets,   short: false },
-          { title: "Severity Breakdown",
-            value: ("🔴 Critical: " + $critical + "  🟠 High: " + $high + "  🟡 Medium: " + $medium + "  🟢 Low: " + $low + "  🔵 Info: " + $info + "  📊 Total: " + $total),
-            short: false },
-          { title: "Tools & Findings",
-            value: $tools,
-            short: false },
-          { title: "S3 Artifacts", value: (if $s3_path != "" then $s3_path else "N/A" end), short: false }
-        ],
+          { title: "Timestamp",          value: $timestamp,   short: true },
+          { title: "Environment",        value: $environment, short: true },
+          { title: "Posture Score",      value: ($posture + "/100  |  Risk: " + $risk + "  |  Coverage: " + $coverage + "%"), short: false },
+          { title: "Scanned URL(s)",     value: $targets,     short: false },
+          { title: "Severity Breakdown", value: ("🔴 Critical: " + $critical + "  🟠 High: " + $high + "  🟡 Medium: " + $medium + "  🟢 Low: " + $low + "  🔵 Info: " + $info + "  📊 Total: " + $total), short: false },
+          { title: "Tools & Findings",   value: $tools,       short: false },
+          { title: "Auth Coverage",      value: $auth_note,   short: false },
+          { title: "S3 Artifacts",       value: (if $s3_path != "" then $s3_path else "N/A" end), short: false }
+        ] + (if $fallback_note != "" then [{ title: "⚠️ Warning", value: $fallback_note, short: false }] else [] end),
         footer: "DAST Pipeline | GitHub Actions",
         ts: (now | floor)
       }

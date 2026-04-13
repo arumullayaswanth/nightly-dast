@@ -95,6 +95,36 @@ REPORT_TEMPLATE = """
 </div>
 <p><strong>Total findings: {{ stats.total }}</strong></p>
 
+{% if posture %}
+<table class="meta-table" style="margin-top:10px;">
+  <tr>
+    <td><strong>Posture Score:</strong></td>
+    <td><strong style="font-size:16px;">{{ posture.posture_score }}/100</strong></td>
+    <td><strong>Risk Level:</strong></td>
+    <td><strong>{{ posture.risk_level }}</strong></td>
+    <td><strong>Coverage Confidence:</strong></td>
+    <td>{{ posture.coverage_confidence }}%</td>
+  </tr>
+</table>
+{% endif %}
+
+{% if meta.stage_flags %}
+<h2>Stage Execution Status</h2>
+<table class="tool-table">
+  <thead><tr><th>Stage</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for stage, status in meta.stage_flags.items() %}
+    <tr>
+      <td>{{ stage }}</td>
+      <td style="color: {% if status == 'passed' %}green{% elif status == 'partial' %}orange{% elif status == 'not_run' %}grey{% else %}red{% endif %}">
+        {{ status }}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <h2>Tools Summary</h2>
 <table class="tool-table">
   <thead>
@@ -201,6 +231,7 @@ def main():
     meta = data.get("scan_metadata", {})
     stats = data.get("statistics", {})
     findings = data.get("findings", [])
+    posture = data.get("posture", {})
 
     critical_and_high = [f for f in findings if f.get("severity") in ("critical", "high")]
 
@@ -226,6 +257,7 @@ def main():
         findings=findings,
         critical_and_high=critical_and_high,
         tool_counts=tool_counts,
+        posture=posture,
     )
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)

@@ -254,7 +254,79 @@ def parse_katana_dir(directory: str) -> list[dict]:
     return findings
 
 
-# ── Summary stats ─────────────────────────────────────────────────────────────
+# ── Newman parser ─────────────────────────────────────────────────────────────
+
+def parse_newman(path: str) -> list[dict]:
+    """Parse Newman JSON report and surface failures as security findings."""
+    if not path or not os.path.isfile(path):
+        return []
+    findings = []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[WARN] Could not parse Newman report {path}: {e}", file=sys.stderr)
+        return []
+
+    run = data.get("run", {})
+    executions = run.get("executions", [])
+
+    for execution in executions:
+        item = execution.get("item", {})
+        item_name = item.get("name", "Unknown request")
+        request = execution.get("request", {})
+        url = ""
+        if isinstance(request.get("url"), dict):
+            url = request["url"].get("raw", "")
+        elif isinstance(request.get("url"), str):
+            url = request["url"]
+
+        # Surface assertion failures as security findings
+        assertions = execution.get("assertions", [])
+        for assertion in assertions:
+            err = assertion.get("error")
+            if err:
+                findings.append({
+                    "id": f"newman-{item_name}-{assertion.get('assertion', 'unknown')}",
+                    "tool": "newman",
+                    "authenticated": True,
+                    "title": f"API assertion failed: {assertion.get('assertion', 'unknown')}",
+                    "severity": "medium",
+                    "description": (
+                        f"Newman assertion failed in request '{item_name}'. "
+                        f"Error: {err.get('message', str(err))}. "
+                        f"This may indicate a security control is missing or broken."
+                    ),
+                    "solution": "Review the API response and ensure security assertions pass.",
+                    "references": "",
+                    "affected_urls": [url] if url else [],
+                    "cwe": "",
+                    "cve": "",
+                })
+
+        # Surface HTTP errors (5xx) as findings
+        response = execution.get("response", {})
+        status_code = response.get("code", 0)
+        if status_code and status_code >= 500:
+            findings.append({
+                "id": f"newman-5xx-{item_name}",
+                "tool": "newman",
+                "authenticated": True,
+                "title": f"API returned HTTP {status_code}: {item_name}",
+                "severity": "high",
+                "description": (
+                    f"Request '{item_name}' returned HTTP {status_code}. "
+                    f"Server errors may indicate unhandled exceptions or security misconfigurations."
+                ),
+                "solution": "Investigate server-side error handling and exception disclosure.",
+                "references": "",
+                "affected_urls": [url] if url else [],
+                "cwe": "CWE-209",
+                "cve": "",
+            })
+
+    print(f"[INFO] Newman parser: {len(findings)} findings from {path}", file=sys.stderr)
+    return findings
 
 def build_stats(findings: list[dict]) -> dict:
     stats = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0, "total": 0}
@@ -274,16 +346,17 @@ def main():
     parser.add_argument("--nuclei-report", default="")
     parser.add_argument("--ffuf-dir", default="")
     parser.add_argument("--katana-dir", default="")
+    parser.add_argument("--newman-report", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--timestamp", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     parser.add_argument("--targets", default="")
     parser.add_argument("--environment", default="non-production")
+    parser.add_argument("--auth-enabled", default="false")
     args = parser.parse_args()
 
     print("[INFO] Parsing ZAP unauthenticated report...")
     zap_findings = parse_zap(args.zap_report, auth=False)
     print(f"       {len(zap_findings)} findings")
-
 
     print("[INFO] Parsing ZAP authenticated report...")
     zap_auth_findings = parse_zap(args.zap_auth_report, auth=True)
@@ -301,13 +374,30 @@ def main():
     katana_findings = parse_katana_dir(args.katana_dir)
     print(f"       {len(katana_findings)} findings")
 
-    all_findings = zap_findings + zap_auth_findings + nuclei_findings + ffuf_findings + katana_findings
+    print("[INFO] Parsing Newman report...")
+    newman_findings = parse_newman(args.newman_report)
+    print(f"       {len(newman_findings)} findings")
+
+    all_findings = (zap_findings + zap_auth_findings + nuclei_findings +
+                    ffuf_findings + katana_findings + newman_findings)
 
     # Sort by severity
     all_findings.sort(key=lambda x: SEVERITY_ORDER.get(x.get("severity", "unknown"), 5))
 
     stats = build_stats(all_findings)
     targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+    auth_enabled = args.auth_enabled.lower() == "true"
+
+    # Stage execution flags — track which tools ran with real output
+    stage_flags = {
+        "zap_unauth":     "passed" if zap_findings else ("partial" if os.path.isfile(args.zap_report) else "not_run"),
+        "zap_auth":       ("passed" if zap_auth_findings else ("partial" if os.path.isfile(args.zap_auth_report) else ("not_run" if not auth_enabled else "failed"))),
+        "nuclei":         "passed" if nuclei_findings else ("partial" if os.path.isfile(args.nuclei_report) else "not_run"),
+        "katana":         "passed" if katana_findings else "not_run",
+        "ffuf":           "passed" if ffuf_findings else "not_run",
+        "newman":         "passed" if newman_findings else ("partial" if os.path.isfile(args.newman_report) else "not_run"),
+        "auth_bootstrap": "passed" if auth_enabled else "not_run",
+    }
 
     summary = {
         "scan_metadata": {
@@ -316,6 +406,9 @@ def main():
             "targets": targets,
             "pipeline": "github-actions-dast-nightly",
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "auth_enabled": auth_enabled,
+            "is_fallback": False,
+            "stage_flags": stage_flags,
         },
         "statistics": stats,
         "findings": all_findings,
@@ -329,6 +422,7 @@ def main():
     print(f"[INFO] Total findings: {stats['total']} "
           f"(critical={stats['critical']}, high={stats['high']}, "
           f"medium={stats['medium']}, low={stats['low']}, info={stats['info']})")
+    print(f"[INFO] Stage flags: {stage_flags}")
 
 
 if __name__ == "__main__":
