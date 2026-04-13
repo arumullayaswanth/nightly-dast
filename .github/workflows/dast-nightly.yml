@@ -321,6 +321,38 @@ jobs:
             echo "[WARN] $MISSING raw scan output(s) missing — pipeline will use fallback summary."
           fi
 
+      # ── Phase 2: Authorization matrix ────────────────────────────────────────
+      - name: Authorization matrix test
+        env:
+          TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          AUTHZ_ENDPOINTS: ${{ vars.AUTHZ_ENDPOINTS || '' }}
+          AUTHZ_OUTPUT: "artifacts/raw/authz/authz-matrix.json"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/authz
+          FIRST_URL=$(echo "${TARGET_URL:-}" | tr ',' '\n' | head -1)
+          TARGET_URL="$FIRST_URL" node scripts/authz-matrix.js \
+            2>&1 | tee artifacts/logs/authz-matrix.log || true
+
+      # ── Phase 2: Rate limit testing ───────────────────────────────────────────
+      - name: Rate limit test
+        env:
+          TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
+          RATE_BURST_COUNT: ${{ vars.RATE_BURST_COUNT || '20' }}
+          LOGIN_PATH: ${{ vars.LOGIN_PATH || '/api/auth/login' }}
+          RESET_PATH: ${{ vars.RESET_PATH || '/api/auth/reset' }}
+          SIGNUP_PATH: ${{ vars.SIGNUP_PATH || '/api/auth/register' }}
+          API_TEST_PATH: ${{ vars.API_TEST_PATH || '/api/users' }}
+          RATE_LIMIT_OUTPUT: "artifacts/raw/rate-limit/rate-limit-results.json"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/rate-limit
+          FIRST_URL=$(echo "${TARGET_URL:-}" | tr ',' '\n' | head -1)
+          TARGET_URL="$FIRST_URL" node scripts/rate-limit-test.js \
+            2>&1 | tee artifacts/logs/rate-limit.log || true
+
       # ── Report generation ─────────────────────────────────────────────────────
       - name: Normalize and consolidate reports (summary.json)
         env:
@@ -338,6 +370,8 @@ jobs:
             --ffuf-dir artifacts/raw/ffuf \
             --katana-dir artifacts/raw/katana \
             --newman-report artifacts/raw/newman/newman-report.json \
+            --authz-report artifacts/raw/authz/authz-matrix.json \
+            --rate-limit-report artifacts/raw/rate-limit/rate-limit-results.json \
             --output artifacts/final/summary.json \
             --timestamp "$SCAN_TIMESTAMP" \
             --targets "$TARGET_URLS" \
@@ -384,6 +418,23 @@ jobs:
           python3 scripts/posture-score.py \
             --summary artifacts/final/summary.json \
             2>&1 | tee artifacts/logs/posture.log
+
+      - name: Regression diff (new vs fixed findings)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
+        run: |
+          set -euo pipefail
+          pip install -q boto3 2>/dev/null || true
+          python3 scripts/regression-diff.py \
+            --current artifacts/final/summary.json \
+            --bucket "$S3_BUCKET" \
+            --prefix "dast/" \
+            --region "${AWS_DEFAULT_REGION:-us-east-1}" \
+            2>&1 | tee artifacts/logs/regression-diff.log || true
 
       - name: Generate PDF summary report
         env:

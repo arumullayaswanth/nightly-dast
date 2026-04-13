@@ -254,6 +254,23 @@ def parse_katana_dir(directory: str) -> list[dict]:
     return findings
 
 
+# ── Generic JSON findings parser (authz-matrix, rate-limit) ──────────────────
+
+def parse_json_findings(path: str, tool_name: str) -> list[dict]:
+    """Parse any tool output that has a top-level 'findings' array."""
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[WARN] Could not parse {tool_name} report {path}: {e}", file=sys.stderr)
+        return []
+    findings = data.get("findings", [])
+    print(f"[INFO] {tool_name} parser: {len(findings)} findings from {path}", file=sys.stderr)
+    return findings
+
+
 # ── Newman parser ─────────────────────────────────────────────────────────────
 
 def parse_newman(path: str) -> list[dict]:
@@ -347,6 +364,8 @@ def main():
     parser.add_argument("--ffuf-dir", default="")
     parser.add_argument("--katana-dir", default="")
     parser.add_argument("--newman-report", default="")
+    parser.add_argument("--authz-report", default="")
+    parser.add_argument("--rate-limit-report", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--timestamp", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     parser.add_argument("--targets", default="")
@@ -378,8 +397,17 @@ def main():
     newman_findings = parse_newman(args.newman_report)
     print(f"       {len(newman_findings)} findings")
 
+    print("[INFO] Parsing authz-matrix results...")
+    authz_findings = parse_json_findings(args.authz_report, "authz-matrix")
+    print(f"       {len(authz_findings)} findings")
+
+    print("[INFO] Parsing rate-limit results...")
+    rate_findings = parse_json_findings(args.rate_limit_report, "rate-limit-test")
+    print(f"       {len(rate_findings)} findings")
+
     all_findings = (zap_findings + zap_auth_findings + nuclei_findings +
-                    ffuf_findings + katana_findings + newman_findings)
+                    ffuf_findings + katana_findings + newman_findings +
+                    authz_findings + rate_findings)
 
     # Sort by severity
     all_findings.sort(key=lambda x: SEVERITY_ORDER.get(x.get("severity", "unknown"), 5))
@@ -397,6 +425,8 @@ def main():
         "ffuf":           "passed" if ffuf_findings else "not_run",
         "newman":         "passed" if newman_findings else ("partial" if os.path.isfile(args.newman_report) else "not_run"),
         "auth_bootstrap": "passed" if auth_enabled else "not_run",
+        "authz_matrix":   "passed" if authz_findings else ("partial" if os.path.isfile(args.authz_report) else "not_run"),
+        "rate_limit":     "passed" if rate_findings else ("partial" if os.path.isfile(args.rate_limit_report) else "not_run"),
     }
 
     summary = {

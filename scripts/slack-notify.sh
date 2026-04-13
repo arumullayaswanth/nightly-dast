@@ -21,8 +21,10 @@ fi
 # Read findings summary from summary.json if available
 CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; INFO=0; TOTAL=0
 ZAP_COUNT=0; NUCLEI_COUNT=0; FFUF_COUNT=0; KATANA_COUNT=0; NEWMAN_COUNT=0
+AUTHZ_COUNT=0; RATE_COUNT=0
 POSTURE_SCORE="N/A"; COVERAGE="N/A"; RISK_LEVEL="UNKNOWN"
 IS_FALLBACK="false"; AUTH_STATUS="not_run"; ZAP_AUTH_STATUS="not_run"
+NEW_FINDINGS="N/A"; FIXED_FINDINGS="N/A"; REGRESSION_SCORE="N/A"
 
 if [ -f "artifacts/final/summary.json" ]; then
   CRITICAL=$(jq -r '.statistics.critical // 0' artifacts/final/summary.json)
@@ -42,10 +44,15 @@ if [ -f "artifacts/final/summary.json" ]; then
   IS_FALLBACK=$(jq -r '.scan_metadata.is_fallback // false' artifacts/final/summary.json)
   AUTH_STATUS=$(jq -r '.scan_metadata.stage_flags.auth_bootstrap // "not_run"' artifacts/final/summary.json)
   ZAP_AUTH_STATUS=$(jq -r '.scan_metadata.stage_flags.zap_auth // "not_run"' artifacts/final/summary.json)
+  NEW_FINDINGS=$(jq -r '.scan_metadata.new_findings_count // "N/A"' artifacts/final/summary.json)
+  FIXED_FINDINGS=$(jq -r '.scan_metadata.fixed_findings_count // "N/A"' artifacts/final/summary.json)
+  REGRESSION_SCORE=$(jq -r '.scan_metadata.regression_score // "N/A"' artifacts/final/summary.json)
+  AUTHZ_COUNT=$(jq -r '[.findings[] | select(.tool=="authz-matrix")] | length' artifacts/final/summary.json)
+  RATE_COUNT=$(jq -r '[.findings[] | select(.tool=="rate-limit-test")] | length' artifacts/final/summary.json)
 fi
 
 # Build tools summary line
-TOOLS_SUMMARY="🔍 ZAP: ${ZAP_COUNT}  |  ☢️ Nuclei: ${NUCLEI_COUNT}  |  🌐 Katana: ${KATANA_COUNT}  |  💥 ffuf: ${FFUF_COUNT}  |  📬 Newman: ${NEWMAN_COUNT}"
+TOOLS_SUMMARY="🔍 ZAP: ${ZAP_COUNT}  |  ☢️ Nuclei: ${NUCLEI_COUNT}  |  🌐 Katana: ${KATANA_COUNT}  |  💥 ffuf: ${FFUF_COUNT}  |  📬 Newman: ${NEWMAN_COUNT}  |  🔐 AuthZ: ${AUTHZ_COUNT}  |  ⏱️ RateLimit: ${RATE_COUNT}"
 
 # Fallback warning
 FALLBACK_NOTE=""
@@ -105,6 +112,9 @@ PAYLOAD=$(jq -n \
   --arg risk "$RISK_LEVEL" \
   --arg auth_note "$AUTH_NOTE" \
   --arg s3_path "$S3_PATH" \
+  --arg new_count "$NEW_FINDINGS" \
+  --arg fixed_count "$FIXED_FINDINGS" \
+  --arg regression "$REGRESSION_SCORE" \
   --argjson fallback_fields "$FALLBACK_FIELD" \
   '{
     attachments: [
@@ -115,6 +125,7 @@ PAYLOAD=$(jq -n \
           { title: "Timestamp",          value: $timestamp,   short: true },
           { title: "Environment",        value: $environment, short: true },
           { title: "Posture Score",      value: ($posture + "/100  |  Risk: " + $risk + "  |  Coverage: " + $coverage + "%"), short: false },
+          { title: "Regression",         value: ("📈 Score: " + $regression + "/100  |  🆕 New: " + $new_count + "  |  ✅ Fixed: " + $fixed_count), short: false },
           { title: "Scanned URL(s)",     value: $targets,     short: false },
           { title: "Severity Breakdown", value: ("🔴 Critical: " + $critical + "  🟠 High: " + $high + "  🟡 Medium: " + $medium + "  🟢 Low: " + $low + "  🔵 Info: " + $info + "  📊 Total: " + $total), short: false },
           { title: "Tools & Findings",   value: $tools,       short: false },
