@@ -77,6 +77,15 @@ fi
 TARGET_LIST=$(echo "$TARGET_URLS" | tr ',' '\n' | sed 's/^/• /' | tr '\n' '\n')
 
 # Build Slack payload
+# Build optional fallback warning field
+FALLBACK_FIELD=""
+if [ "$IS_FALLBACK" = "true" ]; then
+  FALLBACK_FIELD=$(jq -n --arg note "$FALLBACK_NOTE" \
+    '[{ title: "⚠️ Warning", value: $note, short: false }]')
+else
+  FALLBACK_FIELD="[]"
+fi
+
 PAYLOAD=$(jq -n \
   --arg color "$COLOR" \
   --arg status_emoji "$STATUS_EMOJI" \
@@ -95,14 +104,14 @@ PAYLOAD=$(jq -n \
   --arg coverage "$COVERAGE" \
   --arg risk "$RISK_LEVEL" \
   --arg auth_note "$AUTH_NOTE" \
-  --arg fallback_note "$FALLBACK_NOTE" \
   --arg s3_path "$S3_PATH" \
+  --argjson fallback_fields "$FALLBACK_FIELD" \
   '{
     attachments: [
       {
         color: $color,
         title: ($status_emoji + " DAST Nightly Scan — " + $status_text),
-        fields: [
+        fields: ([
           { title: "Timestamp",          value: $timestamp,   short: true },
           { title: "Environment",        value: $environment, short: true },
           { title: "Posture Score",      value: ($posture + "/100  |  Risk: " + $risk + "  |  Coverage: " + $coverage + "%"), short: false },
@@ -111,7 +120,7 @@ PAYLOAD=$(jq -n \
           { title: "Tools & Findings",   value: $tools,       short: false },
           { title: "Auth Coverage",      value: $auth_note,   short: false },
           { title: "S3 Artifacts",       value: (if $s3_path != "" then $s3_path else "N/A" end), short: false }
-        ] + (if $fallback_note != "" then [{ title: "⚠️ Warning", value: $fallback_note, short: false }] else [] end),
+        ] + $fallback_fields),
         footer: "DAST Pipeline | GitHub Actions",
         ts: (now | floor)
       }
