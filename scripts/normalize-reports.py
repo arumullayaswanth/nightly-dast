@@ -369,6 +369,9 @@ def main():
     parser.add_argument("--bl-report", default="")
     parser.add_argument("--race-report", default="")
     parser.add_argument("--surface-report", default="")
+    parser.add_argument("--oast-report", default="")
+    parser.add_argument("--upload-report", default="")
+    parser.add_argument("--frontend-report", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--timestamp", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     parser.add_argument("--targets", default="")
@@ -420,10 +423,26 @@ def main():
     surface_findings = parse_json_findings(args.surface_report, "attack-surface")
     print(f"       {len(surface_findings)} findings")
 
+    print("[INFO] Parsing OAST results...")
+    oast_findings = parse_nuclei(args.oast_report)  # same JSONL format as nuclei
+    # re-tag as oast tool
+    for f in oast_findings:
+        f["tool"] = "oast"
+    print(f"       {len(oast_findings)} findings")
+
+    print("[INFO] Parsing upload-abuse results...")
+    upload_findings = parse_json_findings(args.upload_report, "upload-abuse")
+    print(f"       {len(upload_findings)} findings")
+
+    print("[INFO] Parsing frontend-security results...")
+    frontend_findings = parse_json_findings(args.frontend_report, "frontend-security")
+    print(f"       {len(frontend_findings)} findings")
+
     all_findings = (zap_findings + zap_auth_findings + nuclei_findings +
                     ffuf_findings + katana_findings + newman_findings +
                     authz_findings + rate_findings + bl_findings +
-                    race_findings + surface_findings)
+                    race_findings + surface_findings + oast_findings +
+                    upload_findings + frontend_findings)
 
     # Sort by severity
     all_findings.sort(key=lambda x: SEVERITY_ORDER.get(x.get("severity", "unknown"), 5))
@@ -446,6 +465,9 @@ def main():
         "business_logic": "passed" if bl_findings else ("partial" if os.path.isfile(args.bl_report) else "not_run"),
         "race_condition":  "passed" if race_findings else ("partial" if os.path.isfile(args.race_report) else "not_run"),
         "attack_surface":  "passed" if surface_findings else ("partial" if os.path.isfile(args.surface_report) else "not_run"),
+        "oast":            "passed" if oast_findings else ("partial" if os.path.isfile(args.oast_report) else "not_run"),
+        "upload_abuse":    "passed" if upload_findings else ("partial" if os.path.isfile(args.upload_report) else "not_run"),
+        "frontend_security": "passed" if frontend_findings else ("partial" if os.path.isfile(args.frontend_report) else "not_run"),
     }
 
     summary = {

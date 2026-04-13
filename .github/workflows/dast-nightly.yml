@@ -36,6 +36,15 @@ jobs:
           mkdir -p artifacts/raw/katana
           mkdir -p artifacts/raw/ffuf
           mkdir -p artifacts/raw/newman
+          mkdir -p artifacts/raw/authz
+          mkdir -p artifacts/raw/rate-limit
+          mkdir -p artifacts/raw/business-logic
+          mkdir -p artifacts/raw/race-condition
+          mkdir -p artifacts/raw/attack-surface
+          mkdir -p artifacts/raw/arjun
+          mkdir -p artifacts/raw/oast
+          mkdir -p artifacts/raw/upload-abuse
+          mkdir -p artifacts/raw/frontend
           mkdir -p artifacts/final
           mkdir -p artifacts/logs
           # Set open permissions so ZAP Docker container (uid 1000) can write to all dirs
@@ -56,7 +65,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           set -euo pipefail
-          pip install -q requests jinja2 weasyprint
+          pip install -q requests jinja2 weasyprint arjun
 
       - name: Set up Node.js (Playwright + Newman)
         uses: actions/setup-node@v4.4.0
@@ -217,45 +226,42 @@ jobs:
         if: ${{ vars.AUTH_ENABLED == 'true' }}
         env:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
-          ZAP_AUTH_SCRIPT: ${{ vars.ZAP_AUTH_SCRIPT || '' }}
         run: |
           set -euo pipefail
           FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
-          mkdir -p artifacts/raw/zap
+          mkdir -p artifacts/raw/zap artifacts/logs
           chmod 777 artifacts/raw/zap
 
-          # Build cookie/token args from Playwright auth bootstrap output
-          ZAP_REPLACE_HEADER=""
-          if [ -f /tmp/auth-token.txt ]; then
-            TOKEN=$(cat /tmp/auth-token.txt)
-            ZAP_REPLACE_HEADER="-z \"-config replacer.full_list(0).description=auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Authorization -config replacer.full_list(0).replacement=Bearer\\ ${TOKEN}\""
-            echo "[INFO] Using Bearer token from auth bootstrap for authenticated ZAP scan."
-          elif [ -f /tmp/zap-session.txt ]; then
-            COOKIE=$(cat /tmp/zap-session.txt)
-            ZAP_REPLACE_HEADER="-z \"-config replacer.full_list(0).description=session -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).replacement=${COOKIE}\""
-            echo "[INFO] Using session cookie from auth bootstrap for authenticated ZAP scan."
-          else
-            echo "[WARN] No auth token or session cookie found — authenticated scan will run without credentials."
-          fi
+          # Build ZAP Automation Framework plan with real header injection
+          # This replaces the broken eval+$ZAP_REPLACE_HEADER approach
+          bash scripts/zap-auth-setup.sh "$FIRST_URL" /tmp/zap-auth-plan.yaml \
+            2>&1 | tee artifacts/logs/zap-auth-setup.log
 
-          # Mount auth files into container if they exist
+          # Mount auth artifacts into container
           MOUNT_ARGS=""
-          [ -f /tmp/session-cookies.json ] && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/session-cookies.json:/tmp/session-cookies.json:ro"
-          [ -f /tmp/auth-token.txt ] && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/auth-token.txt:/tmp/auth-token.txt:ro"
+          [ -f /tmp/auth-token.txt ]        && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/auth-token.txt:/tmp/auth-token.txt:ro"
+          [ -f /tmp/zap-session.txt ]       && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/zap-session.txt:/tmp/zap-session.txt:ro"
+          [ -f /tmp/session-cookies.json ]  && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/session-cookies.json:/tmp/session-cookies.json:ro"
 
-          eval docker run --rm \
+          docker run --rm \
             -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
             -v "$(pwd)/configs/zap-config.yaml:/zap/config.yaml:ro" \
+            -v "/tmp/zap-auth-plan.yaml:/zap/auth-plan.yaml:ro" \
             $MOUNT_ARGS \
             ghcr.io/zaproxy/zaproxy:stable \
-            zap-full-scan.py \
-              -t "$FIRST_URL" \
-              -c /zap/config.yaml \
-              -J /zap/wrk/zap-auth-report.json \
-              -r /zap/wrk/zap-auth-report.html \
-              -I \
-              $ZAP_REPLACE_HEADER \
+            zap.sh -cmd \
+              -autorun /zap/auth-plan.yaml \
               2>&1 | tee artifacts/logs/zap-auth.log || true
+
+          echo "--- ZAP auth output files ---"
+          ls -lh artifacts/raw/zap/ || echo "No ZAP auth output files produced"
+
+          # Validate authenticated report was produced
+          if [ -f "artifacts/raw/zap/zap-auth-report.json" ]; then
+            echo "[OK] zap-auth-report.json exists ($(wc -c < artifacts/raw/zap/zap-auth-report.json) bytes)"
+          else
+            echo "[WARN] zap-auth-report.json was NOT created — check zap-auth.log"
+          fi
 
       # ── ZAP diagnostic (runs when ZAP produces no reports) ───────────────────
       - name: ZAP scan diagnosis
@@ -327,6 +333,7 @@ jobs:
           TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
           USER_TOKEN: ${{ secrets.USER_TOKEN }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          USER_B_TOKEN: ${{ secrets.USER_B_TOKEN }}
           AUTHZ_ENDPOINTS: ${{ vars.AUTHZ_ENDPOINTS || '' }}
           AUTHZ_OUTPUT: "artifacts/raw/authz/authz-matrix.json"
         run: |
@@ -398,6 +405,99 @@ jobs:
             --target     "$FIRST_URL" \
             2>&1 | tee artifacts/logs/attack-surface.log || true
 
+      # ── Phase 3: Arjun parameter discovery ───────────────────────────────────
+      - name: Arjun parameter discovery
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/arjun
+          for url in $(echo "$TARGET_URLS" | tr ',' '\n'); do
+            safe=$(echo "$url" | sed 's|[^a-zA-Z0-9]|_|g')
+            arjun \
+              -u "$url" \
+              --stable \
+              -oJ "artifacts/raw/arjun/${safe}.json" \
+              2>&1 | tee -a artifacts/logs/arjun.log || true
+          done
+          # Merge Arjun results into attack-surface.json
+          python3 scripts/arjun-merge.py \
+            --arjun-dir  artifacts/raw/arjun \
+            --surface    artifacts/raw/attack-surface/attack-surface.json \
+            2>&1 | tee -a artifacts/logs/arjun.log || true
+
+      # ── Phase 3: OAST / interactsh blind callback scan ────────────────────────
+      - name: Nuclei OAST scan (blind SSRF/XSS callbacks)
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+          NUCLEI_RATE: ${{ vars.NUCLEI_RATE || '50' }}
+          INTERACTSH_SERVER: ${{ vars.INTERACTSH_SERVER || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/oast
+          TARGETS_FILE=$(mktemp)
+          echo "$TARGET_URLS" | tr ',' '\n' > "$TARGETS_FILE"
+
+          # Build interactsh server flag if custom server is configured
+          ISERVER_FLAG=""
+          if [ -n "${INTERACTSH_SERVER:-}" ]; then
+            ISERVER_FLAG="-iserver $INTERACTSH_SERVER"
+          fi
+
+          ~/go/bin/nuclei \
+            -l "$TARGETS_FILE" \
+            -tags "oast,ssrf,blind,interactsh" \
+            -severity "medium,high,critical" \
+            -rl "$NUCLEI_RATE" \
+            $ISERVER_FLAG \
+            -json-export artifacts/raw/oast/oast-report.json \
+            -o artifacts/raw/oast/oast-report.txt \
+            -silent \
+            2>&1 | tee artifacts/logs/oast.log || true
+          rm -f "$TARGETS_FILE"
+
+          echo "--- OAST scan results ---"
+          if [ -f "artifacts/raw/oast/oast-report.json" ]; then
+            echo "[OK] oast-report.json ($(wc -c < artifacts/raw/oast/oast-report.json) bytes)"
+          else
+            echo "[INFO] No OAST callbacks detected (oast-report.json not created)"
+          fi
+
+      # ── Phase 4: File upload abuse testing ───────────────────────────────────
+      - name: File upload abuse test
+        env:
+          TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
+          UPLOAD_PATH: ${{ vars.UPLOAD_PATH || '/api/upload' }}
+          UPLOAD_FIELD: ${{ vars.UPLOAD_FIELD || 'file' }}
+          RETRIEVE_PATH: ${{ vars.RETRIEVE_PATH || '/uploads' }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          UPLOAD_OUTPUT: "artifacts/raw/upload-abuse/upload-results.json"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/upload-abuse
+          FIRST_URL=$(echo "${TARGET_URL:-}" | tr ',' '\n' | head -1)
+          TARGET_URL="$FIRST_URL" node scripts/upload-abuse.js \
+            2>&1 | tee artifacts/logs/upload-abuse.log || true
+
+      # ── Phase 4: Frontend / browser security suite ────────────────────────────
+      - name: Frontend security test
+        env:
+          TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
+          AUTH_ENABLED: ${{ vars.AUTH_ENABLED || 'false' }}
+          AUTH_URL: ${{ vars.AUTH_URL || '' }}
+          AUTH_USERNAME: ${{ secrets.AUTH_USERNAME }}
+          AUTH_PASSWORD: ${{ secrets.AUTH_PASSWORD }}
+          AUTH_USERNAME_SELECTOR: ${{ vars.AUTH_USERNAME_SELECTOR || '#username' }}
+          AUTH_PASSWORD_SELECTOR: ${{ vars.AUTH_PASSWORD_SELECTOR || '#password' }}
+          AUTH_SUBMIT_SELECTOR: ${{ vars.AUTH_SUBMIT_SELECTOR || '[type=submit]' }}
+          FRONTEND_OUTPUT: "artifacts/raw/frontend/frontend-results.json"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/frontend
+          FIRST_URL=$(echo "${TARGET_URL:-}" | tr ',' '\n' | head -1)
+          TARGET_URL="$FIRST_URL" node scripts/frontend-security.js \
+            2>&1 | tee artifacts/logs/frontend-security.log || true
+
       # ── Report generation ─────────────────────────────────────────────────────
       - name: Normalize and consolidate reports (summary.json)
         env:
@@ -420,6 +520,9 @@ jobs:
             --bl-report artifacts/raw/business-logic/bl-results.json \
             --race-report artifacts/raw/race-condition/race-results.json \
             --surface-report artifacts/raw/attack-surface/attack-surface.json \
+            --oast-report artifacts/raw/oast/oast-report.json \
+            --upload-report artifacts/raw/upload-abuse/upload-results.json \
+            --frontend-report artifacts/raw/frontend/frontend-results.json \
             --output artifacts/final/summary.json \
             --timestamp "$SCAN_TIMESTAMP" \
             --targets "$TARGET_URLS" \
@@ -611,6 +714,7 @@ jobs:
         if: always()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_ONCALL_WEBHOOK: ${{ secrets.SLACK_ONCALL_WEBHOOK }}
           SCAN_TIMESTAMP: ${{ env.SCAN_TIMESTAMP }}
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           ENVIRONMENT: ${{ vars.ENVIRONMENT || 'non-production' }}

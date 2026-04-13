@@ -237,11 +237,18 @@ def main():
 
     # Always show all pipeline tools, even if they found 0 findings
     ALL_TOOLS = {
-        "zap":     "OWASP ZAP (DAST Scanner)",
-        "nuclei":  "Nuclei (Security Regression)",
-        "katana":  "Katana (Endpoint Discovery)",
-        "ffuf":    "ffuf (Forced Browsing)",
-        "newman":  "Newman (API Workflow)",
+        "zap":              "OWASP ZAP (DAST Scanner)",
+        "nuclei":           "Nuclei (Security Regression)",
+        "katana":           "Katana (Endpoint Discovery)",
+        "ffuf":             "ffuf (Forced Browsing)",
+        "newman":           "Newman (API Workflow)",
+        "authz-matrix":     "AuthZ Matrix (Access Control)",
+        "rate-limit-test":  "Rate Limit Testing",
+        "business-logic":   "Business Logic Testing",
+        "race-condition":   "Race Condition Testing",
+        "attack-surface":   "Attack Surface Inventory",
+        "upload-abuse":     "File Upload Abuse Testing",
+        "frontend-security":"Frontend / Browser Security",
     }
     tool_counts = {label: 0 for label in ALL_TOOLS.values()}
     for f in findings:

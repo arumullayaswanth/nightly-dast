@@ -35,13 +35,20 @@ SEVERITY_WEIGHTS = {
 # ── Stage definitions ─────────────────────────────────────────────────────────
 # Each stage: (flag_key, weight, is_critical_control)
 STAGES = [
-    ("zap_unauth",    1.0, True),
-    ("zap_auth",      1.0, True),
-    ("nuclei",        1.0, True),
-    ("katana",        0.5, False),
-    ("ffuf",          0.5, False),
-    ("newman",        0.5, True),
-    ("auth_bootstrap",1.0, True),
+    ("zap_unauth",        1.0, True),
+    ("zap_auth",          1.0, True),
+    ("nuclei",            1.0, True),
+    ("katana",            0.5, False),
+    ("ffuf",              0.5, False),
+    ("newman",            0.5, True),
+    ("auth_bootstrap",    1.0, True),
+    ("authz_matrix",      1.0, True),
+    ("rate_limit",        0.5, True),
+    ("business_logic",    0.5, True),
+    ("race_condition",    0.5, False),
+    ("attack_surface",    0.5, False),
+    ("upload_abuse",      0.5, True),
+    ("frontend_security", 0.5, True),
 ]
 
 

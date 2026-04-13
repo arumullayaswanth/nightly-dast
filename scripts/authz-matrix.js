@@ -32,6 +32,7 @@ const url = require("url");
 const TARGET_URL = process.env.TARGET_URL || "";
 const USER_TOKEN = process.env.USER_TOKEN || "";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+const USER_B_TOKEN = process.env.USER_B_TOKEN || "";   // second user for cross-object IDOR tests
 const AUTHZ_OUTPUT = process.env.AUTHZ_OUTPUT || "artifacts/raw/authz/authz-matrix.json";
 
 // Default endpoints to probe — override with AUTHZ_ENDPOINTS env var
@@ -117,7 +118,7 @@ async function main() {
     ];
 
     console.log(`[INFO] Authorization matrix test: ${TARGET_URL}`);
-    console.log(`[INFO] Testing ${endpoints.length} endpoints × ${roles.length} roles`);
+    console.log(`[INFO] Testing ${endpoints.length} endpoints x ${roles.length} roles`);
 
     const results = [];
     let totalTests = 0;
@@ -125,25 +126,14 @@ async function main() {
     let failed = 0;
     let errors = 0;
 
+    // ── Role-based matrix ─────────────────────────────────────────────────────
     for (const endpoint of endpoints) {
-        const row = {
-            path: endpoint.path,
-            expected: endpoint.expected,
-            results: {},
-            issues: [],
-        };
+        const row = { path: endpoint.path, expected: endpoint.expected, results: {}, issues: [] };
 
         for (const role of roles) {
-            // Skip roles with no token if token is required
             const response = await makeRequest(TARGET_URL, endpoint.path, role.token);
             const verdict = classify(role.name, response.status, endpoint.expected);
-
-            row.results[role.name] = {
-                status: response.status,
-                expected: endpoint.expected[role.name],
-                verdict,
-            };
-
+            row.results[role.name] = { status: response.status, expected: endpoint.expected[role.name], verdict };
             totalTests++;
             if (verdict === "pass") passed++;
             else if (verdict === "fail") {
@@ -155,18 +145,56 @@ async function main() {
                     severity: role.name === "anonymous" && response.status === 200 ? "high" : "medium",
                     description: `${role.name} got HTTP ${response.status} on ${endpoint.path} (expected ${endpoint.expected[role.name]})`,
                 });
-            } else if (verdict === "error") {
-                errors++;
-            }
-
-            process.stdout.write(`  [${verdict.toUpperCase()}] ${role.name.padEnd(10)} ${endpoint.path} → ${response.status}\n`);
+            } else if (verdict === "error") { errors++; }
+            process.stdout.write(`  [${verdict.toUpperCase()}] ${role.name.padEnd(10)} ${endpoint.path} -> ${response.status}\n`);
         }
-
         results.push(row);
     }
 
-    // Build findings for normalize-reports.py ingestion
-    const findings = [];
+    // ── Cross-user IDOR: User A vs User B object access ───────────────────────
+    const idorFindings = [];
+    if (USER_TOKEN && USER_B_TOKEN) {
+        console.log("\n[INFO] Running cross-user IDOR tests (User A vs User B)...");
+        const idorTemplates = [
+            "/api/users/{id}", "/api/users/{id}/profile", "/api/users/{id}/orders",
+            "/api/users/{id}/settings", "/api/orders/{id}", "/api/invoices/{id}",
+            "/api/documents/{id}", "/api/messages/{id}",
+        ];
+        for (const template of idorTemplates) {
+            for (const id of [1, 2, 3]) {
+                const epPath = template.replace("{id}", String(id));
+                const userAResp = await makeRequest(TARGET_URL, epPath, USER_TOKEN);
+                const userBResp = await makeRequest(TARGET_URL, epPath, USER_B_TOKEN);
+                totalTests++;
+                if (userAResp.status === 200 && userBResp.status === 200) {
+                    idorFindings.push({
+                        id: `idor-cross-user-${epPath.replace(/\//g, "-")}-${id}`,
+                        tool: "authz-matrix",
+                        authenticated: true,
+                        title: `Potential IDOR/BOLA: Cross-user object access on ${epPath}`,
+                        severity: "high",
+                        description: `Both User A and User B received HTTP 200 on ${epPath}. User B may be accessing User A's object without ownership — potential BOLA/IDOR.`,
+                        solution: "Enforce object-level ownership checks server-side. Verify the requesting user owns or has explicit permission to access the requested resource.",
+                        references: "OWASP API Security Top 10 — API1:2023 Broken Object Level Authorization (BOLA)",
+                        affected_urls: [`${TARGET_URL}${epPath}`],
+                        cwe: "CWE-639",
+                        cve: "",
+                    });
+                    process.stdout.write(`  [IDOR] ${epPath} — both users got 200\n`);
+                    failed++;
+                } else {
+                    process.stdout.write(`  [OK]   ${epPath} — userA:${userAResp.status} userB:${userBResp.status}\n`);
+                    passed++;
+                }
+            }
+        }
+        console.log(`[INFO] Cross-user IDOR: ${idorFindings.length} potential issues found`);
+    } else {
+        console.log("[INFO] USER_B_TOKEN not set — skipping cross-user IDOR tests");
+    }
+
+    // ── Build all findings ────────────────────────────────────────────────────
+    const findings = [...idorFindings];
     for (const row of results) {
         for (const issue of row.issues) {
             findings.push({
@@ -189,7 +217,7 @@ async function main() {
         scan_type: "authz-matrix",
         target: TARGET_URL,
         timestamp: new Date().toISOString(),
-        summary: { total: totalTests, passed, failed, errors },
+        summary: { total: totalTests, passed, failed, errors, idor_issues: idorFindings.length },
         matrix: results,
         findings,
     };
@@ -197,8 +225,9 @@ async function main() {
     fs.mkdirSync(path.dirname(AUTHZ_OUTPUT), { recursive: true });
     fs.writeFileSync(AUTHZ_OUTPUT, JSON.stringify(output, null, 2));
 
-    console.log(`\n[INFO] Results: ${passed} passed, ${failed} failed, ${errors} errors`);
-    console.log(`[INFO] Findings: ${findings.length} authorization issues`);
+    console.log(`\n[INFO] Role matrix: ${passed} passed, ${failed} failed, ${errors} errors`);
+    console.log(`[INFO] IDOR findings: ${idorFindings.length}`);
+    console.log(`[INFO] Total findings: ${findings.length}`);
     console.log(`[INFO] Output written to ${AUTHZ_OUTPUT}`);
 
     if (failed > 0) process.exit(1);
