@@ -32,22 +32,32 @@ GitHub Actions (nightly cron)
 ┌───────────────────────────────────────────────────────┐
 │                   DAST Pipeline Job                   │
 │                                                       │
-│  1. Pre-flight      → curl reachability checks        │
-│  2. Auth Bootstrap  → Playwright login (optional)     │
-│  3. Discovery       → Katana crawl + ffuf fuzz        │
-│  4. Newman          → API workflow setup (optional)   │
-│  5. ZAP Scan        → Unauthenticated full scan       │
-│  6. ZAP Auth Scan   → Authenticated scan (optional)   │
-│  7. Nuclei Scan     → Supplemental regression checks  │
-│  8. Normalize       → Unified summary.json            │
-│  9. PDF Report      → summary.pdf                     │
-│ 10. S3 Upload       → dast/<timestamp>/               │
-│ 11. Slack Notify    → Status + findings + S3 link     │
+│  1.  Pre-flight        → curl reachability checks     │
+│  2.  Auth Bootstrap    → Playwright login (optional)  │
+│  3.  Discovery         → Katana crawl + ffuf fuzz     │
+│  4.  Newman            → API workflow setup           │
+│  5.  ZAP Scan          → Unauthenticated full scan    │
+│  6.  ZAP Auth Scan     → Real authenticated scan ✅   │
+│  7.  ZAP Diagnosis     → Root-cause if ZAP fails      │
+│  8.  Nuclei Scan       → Supplemental regression      │
+│  9.  AuthZ Matrix      → anonymous/user/admin checks  │
+│  10. Rate Limit Suite  → 429/throttle/lockout tests   │
+│  11. Business Logic    → abuse-case test suite        │
+│  12. Race Conditions   → concurrency/parallel tests   │
+│  13. Attack Surface    → route/param inventory        │
+│  14. Upload Abuse      → file upload security suite   │
+│  15. Frontend Security → browser/JS security suite    │
+│  16. Normalize         → Unified summary.json         │
+│  17. Posture Score     → 0-100 security posture       │
+│  18. Regression Diff   → new vs fixed findings        │
+│  19. PDF Report        → summary.pdf                  │
+│  20. S3 Upload         → dast/<timestamp>/            │
+│  21. Slack Notify      → Tiered Red/Yellow/Green      │
 └───────────────────────────────────────────────────────┘
         │                          │
         ▼                          ▼
-   AWS S3 Bucket             Slack Channel
-   dast/<timestamp>/         #security-alerts
+   AWS S3 Bucket             Slack Channel(s)
+   dast/<timestamp>/         #security-alerts + on-call
 ```
 
 ---
@@ -57,17 +67,27 @@ GitHub Actions (nightly cron)
 | Step | Tool | Purpose |
 |---|---|---|
 | Pre-flight | `curl` | Validates all target URLs are reachable before wasting scan time |
-| Auth Bootstrap | Playwright (Chromium) | Headless browser login — exports session cookies and Bearer tokens for authenticated scans |
+| Auth Bootstrap | Playwright (Chromium) | Headless browser login — exports session cookies and Bearer tokens |
 | Endpoint Discovery | Katana | Crawls targets up to configurable depth, discovers all reachable endpoints |
 | Forced Browsing | ffuf | Fuzzes common paths against a wordlist to find hidden/unlinked endpoints |
 | API Workflow | Newman/Postman | Runs Postman collections for API auth setup and workflow testing |
-| DAST Scan | OWASP ZAP | Full active scan — XSS, SQLi, SSRF, security headers, session issues, and more |
-| Authenticated DAST | OWASP ZAP | Same full scan using the session from auth bootstrap |
-| Regression Checks | Nuclei | Template-based checks for CVEs, misconfigs, exposed panels, CORS, CSRF, and more |
+| DAST Scan | OWASP ZAP | Full active scan — XSS, SQLi, SSRF, security headers, session issues |
+| Authenticated DAST | OWASP ZAP (Automation Framework) | Real authenticated scan using ZAP AF plan with injected Playwright session |
+| ZAP Diagnosis | Python | Detects and explains ZAP failure root cause when no reports are produced |
+| Regression Checks | Nuclei | Template-based checks for CVEs, misconfigs, exposed panels, CORS, CSRF |
+| AuthZ Matrix | Node.js | Tests anonymous/user/admin access across all endpoints — IDOR/BOLA/BFLA |
+| Rate Limit Suite | Node.js | Tests login throttling, reset abuse, signup throttling, 429/Retry-After |
+| Business Logic | Node.js | Duplicate submit, negative values, mass assignment, workflow skipping |
+| Race Conditions | Node.js | Parallel request concurrency testing for double-submit and state races |
+| Attack Surface | Python | Aggregates Katana/ffuf/ZAP into route inventory with high-risk tagging |
+| Upload Abuse | Node.js | Extension mismatch, null byte, oversized, SVG XSS, path traversal, access control |
+| Frontend Security | Playwright | Storage leaks, cookie flags, CSP depth, clickjacking, source maps, JS secrets |
 | Normalization | Python | Merges all raw outputs into a single unified `summary.json` |
+| Posture Score | Python | 4-dimension security posture score (0-100) with coverage confidence |
+| Regression Diff | Python | Compares against prior S3 run — new vs fixed findings |
 | PDF Generation | WeasyPrint | Renders a styled HTML report to `summary.pdf` |
 | S3 Upload | AWS CLI | Uploads all raw reports, final reports, and logs under a timestamped S3 path |
-| Slack Notification | Webhook | Posts color-coded summary with finding counts and S3 artifact location |
+| Slack Notification | Webhook | Tiered Red/Yellow/Green with top-3 risks, failed stages, on-call escalation |
 
 ---
 
@@ -85,10 +105,22 @@ GitHub Actions (nightly cron)
 ├── scripts/
 │   ├── preflight.sh                # Target reachability validation
 │   ├── auth-bootstrap.js           # Playwright authenticated login
+│   ├── zap-auth-setup.sh           # ZAP Automation Framework plan builder (real auth injection)
+│   ├── authz-matrix.js             # Phase 2 — authorization matrix testing
+│   ├── rate-limit-test.js          # Phase 2 — rate limiting & anti-automation
+│   ├── regression-diff.py          # Phase 2 — new vs fixed findings comparison
+│   ├── posture-score.py            # Phase 2 — security posture score (0-100)
+│   ├── business-logic-test.js      # Phase 3 — business logic abuse cases
+│   ├── race-condition-test.js      # Phase 3 — concurrency & race condition tests
+│   ├── attack-surface.py           # Phase 3 — attack surface inventory
+│   ├── upload-abuse.js             # Phase 4 — file upload abuse testing
+│   ├── frontend-security.js        # Phase 4 — browser/JS security suite
 │   ├── normalize-reports.py        # Raw output → unified summary.json
 │   ├── generate-pdf.py             # summary.json → summary.pdf
+│   ├── fallback-summary.py         # Safety net if all tools fail
+│   ├── zap-diagnose.py             # ZAP failure root-cause diagnosis
 │   ├── upload-s3.sh                # S3 artifact upload
-│   └── slack-notify.sh             # Slack webhook notification
+│   └── slack-notify.sh             # Tiered Slack notification (Red/Yellow/Green)
 └── docs/
     └── env-vars.md                 # Full environment variable reference
 ```
@@ -99,8 +131,8 @@ GitHub Actions (nightly cron)
 
 | Tool | Version | Purpose |
 |---|---|---|
-| [OWASP ZAP](https://www.zaproxy.org/) | `stable` (Docker) | Main DAST scanning engine |
-| [Playwright](https://playwright.dev/) | Latest | Authenticated browser-based login bootstrap |
+| [OWASP ZAP](https://www.zaproxy.org/) | `stable` (Docker) | Main DAST scanning engine (unauth + real authenticated via AF plan) |
+| [Playwright](https://playwright.dev/) | Latest | Auth bootstrap + frontend/browser security suite |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) | Latest | Supplemental template-based security regression |
 | [Katana](https://github.com/projectdiscovery/katana) | Latest | Endpoint and route discovery / crawling |
 | [ffuf](https://github.com/ffuf/ffuf) | Latest | Forced browsing and path fuzzing |
@@ -367,10 +399,22 @@ All logs are available in:
 - [x] Pipeline runs nightly from GitHub Actions without manual intervention
 - [x] Target URLs are sourced from GitHub Actions environment variables
 - [x] Authenticated flows supported via Playwright session bootstrap
-- [x] Consolidated `summary.json` generated from all tool outputs
-- [x] `summary.pdf` generated from consolidated JSON
+- [x] Authenticated ZAP scan uses real session injection via ZAP Automation Framework
+- [x] Newman findings normalized into summary.json and counted in Slack
+- [x] Authorization matrix tests anonymous/user/admin access (IDOR/BOLA/BFLA)
+- [x] Rate limiting suite tests login throttling, reset abuse, 429/Retry-After
+- [x] Business logic suite tests duplicate submit, negative values, mass assignment, workflow skipping
+- [x] Race condition suite tests parallel request concurrency
+- [x] Attack surface inventory aggregates all discovered routes with high-risk tagging
+- [x] File upload abuse suite tests extension mismatch, null byte, SVG XSS, path traversal, access control
+- [x] Frontend security suite tests storage leaks, cookie flags, CSP depth, source maps, JS secrets
+- [x] Consolidated `summary.json` generated from all tool outputs (all phases)
+- [x] Security posture score (0-100) with coverage confidence calculated
+- [x] Regression diff compares new vs fixed findings against prior S3 run
+- [x] `summary.pdf` generated from consolidated JSON with all phases
 - [x] Reports uploaded to AWS S3 under `dast/` prefix with timestamp
-- [x] Slack notification sent on completion with findings summary and S3 location
+- [x] Slack notification tiered Red/Yellow/Green with top-3 risks, failed stages, on-call escalation
+- [x] Hard fail if fallback summary is used (no silent zero-finding success)
 - [x] Workflow logs and artifacts sufficient for troubleshooting failed runs
 - [x] Solution is open-source-first — no paid scanners required
 

@@ -149,6 +149,9 @@ https://staging.example.com,https://api-staging.example.com
 | `NUCLEI_SEVERITY` | `medium,high,critical` |
 | `KATANA_DEPTH` | `3` |
 | `FFUF_RATE` | `30` |
+| `UPLOAD_PATH` | `/api/upload` (if app has file upload) |
+| `UPLOAD_FIELD` | `file` |
+| `RETRIEVE_PATH` | `/uploads` |
 
 ---
 
@@ -162,6 +165,7 @@ Add these additional secrets:
 |---|---|
 | `AUTH_USERNAME` | Your test account username or email |
 | `AUTH_PASSWORD` | Your test account password |
+| `SLACK_ONCALL_WEBHOOK` | (Optional) Second Slack webhook for red-tier on-call escalation |
 
 Add these variables:
 
