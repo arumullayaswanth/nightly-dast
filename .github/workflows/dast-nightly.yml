@@ -353,6 +353,51 @@ jobs:
           TARGET_URL="$FIRST_URL" node scripts/rate-limit-test.js \
             2>&1 | tee artifacts/logs/rate-limit.log || true
 
+      # ── Phase 3: Business logic testing ──────────────────────────────────────
+      - name: Business logic test
+        env:
+          TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          BL_API_ENDPOINTS: ${{ vars.BL_API_ENDPOINTS || '' }}
+          BL_OUTPUT: "artifacts/raw/business-logic/bl-results.json"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/business-logic
+          FIRST_URL=$(echo "${TARGET_URL:-}" | tr ',' '\n' | head -1)
+          TARGET_URL="$FIRST_URL" node scripts/business-logic-test.js \
+            2>&1 | tee artifacts/logs/business-logic.log || true
+
+      # ── Phase 3: Race condition testing ──────────────────────────────────────
+      - name: Race condition test
+        env:
+          TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          RACE_CONCURRENCY: ${{ vars.RACE_CONCURRENCY || '10' }}
+          RACE_ENDPOINTS: ${{ vars.RACE_ENDPOINTS || '' }}
+          RACE_OUTPUT: "artifacts/raw/race-condition/race-results.json"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/race-condition
+          FIRST_URL=$(echo "${TARGET_URL:-}" | tr ',' '\n' | head -1)
+          TARGET_URL="$FIRST_URL" node scripts/race-condition-test.js \
+            2>&1 | tee artifacts/logs/race-condition.log || true
+
+      # ── Phase 3: Attack surface inventory ────────────────────────────────────
+      - name: Attack surface inventory
+        env:
+          TARGET_URLS: ${{ vars.TARGET_URLS }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/raw/attack-surface
+          FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
+          python3 scripts/attack-surface.py \
+            --katana-dir artifacts/raw/katana \
+            --ffuf-dir   artifacts/raw/ffuf \
+            --zap-report artifacts/raw/zap/zap-report.json \
+            --output     artifacts/raw/attack-surface/attack-surface.json \
+            --target     "$FIRST_URL" \
+            2>&1 | tee artifacts/logs/attack-surface.log || true
+
       # ── Report generation ─────────────────────────────────────────────────────
       - name: Normalize and consolidate reports (summary.json)
         env:
@@ -372,6 +417,9 @@ jobs:
             --newman-report artifacts/raw/newman/newman-report.json \
             --authz-report artifacts/raw/authz/authz-matrix.json \
             --rate-limit-report artifacts/raw/rate-limit/rate-limit-results.json \
+            --bl-report artifacts/raw/business-logic/bl-results.json \
+            --race-report artifacts/raw/race-condition/race-results.json \
+            --surface-report artifacts/raw/attack-surface/attack-surface.json \
             --output artifacts/final/summary.json \
             --timestamp "$SCAN_TIMESTAMP" \
             --targets "$TARGET_URLS" \

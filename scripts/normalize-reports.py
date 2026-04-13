@@ -366,6 +366,9 @@ def main():
     parser.add_argument("--newman-report", default="")
     parser.add_argument("--authz-report", default="")
     parser.add_argument("--rate-limit-report", default="")
+    parser.add_argument("--bl-report", default="")
+    parser.add_argument("--race-report", default="")
+    parser.add_argument("--surface-report", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--timestamp", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     parser.add_argument("--targets", default="")
@@ -405,9 +408,22 @@ def main():
     rate_findings = parse_json_findings(args.rate_limit_report, "rate-limit-test")
     print(f"       {len(rate_findings)} findings")
 
+    print("[INFO] Parsing business-logic results...")
+    bl_findings = parse_json_findings(args.bl_report, "business-logic")
+    print(f"       {len(bl_findings)} findings")
+
+    print("[INFO] Parsing race-condition results...")
+    race_findings = parse_json_findings(args.race_report, "race-condition")
+    print(f"       {len(race_findings)} findings")
+
+    print("[INFO] Parsing attack-surface results...")
+    surface_findings = parse_json_findings(args.surface_report, "attack-surface")
+    print(f"       {len(surface_findings)} findings")
+
     all_findings = (zap_findings + zap_auth_findings + nuclei_findings +
                     ffuf_findings + katana_findings + newman_findings +
-                    authz_findings + rate_findings)
+                    authz_findings + rate_findings + bl_findings +
+                    race_findings + surface_findings)
 
     # Sort by severity
     all_findings.sort(key=lambda x: SEVERITY_ORDER.get(x.get("severity", "unknown"), 5))
@@ -427,6 +443,9 @@ def main():
         "auth_bootstrap": "passed" if auth_enabled else "not_run",
         "authz_matrix":   "passed" if authz_findings else ("partial" if os.path.isfile(args.authz_report) else "not_run"),
         "rate_limit":     "passed" if rate_findings else ("partial" if os.path.isfile(args.rate_limit_report) else "not_run"),
+        "business_logic": "passed" if bl_findings else ("partial" if os.path.isfile(args.bl_report) else "not_run"),
+        "race_condition":  "passed" if race_findings else ("partial" if os.path.isfile(args.race_report) else "not_run"),
+        "attack_surface":  "passed" if surface_findings else ("partial" if os.path.isfile(args.surface_report) else "not_run"),
     }
 
     summary = {

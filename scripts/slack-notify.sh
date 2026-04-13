@@ -21,7 +21,7 @@ fi
 # Read findings summary from summary.json if available
 CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; INFO=0; TOTAL=0
 ZAP_COUNT=0; NUCLEI_COUNT=0; FFUF_COUNT=0; KATANA_COUNT=0; NEWMAN_COUNT=0
-AUTHZ_COUNT=0; RATE_COUNT=0
+AUTHZ_COUNT=0; RATE_COUNT=0; BL_COUNT=0; RACE_COUNT=0; SURFACE_COUNT=0
 POSTURE_SCORE="N/A"; COVERAGE="N/A"; RISK_LEVEL="UNKNOWN"
 IS_FALLBACK="false"; AUTH_STATUS="not_run"; ZAP_AUTH_STATUS="not_run"
 NEW_FINDINGS="N/A"; FIXED_FINDINGS="N/A"; REGRESSION_SCORE="N/A"
@@ -49,10 +49,12 @@ if [ -f "artifacts/final/summary.json" ]; then
   REGRESSION_SCORE=$(jq -r '.scan_metadata.regression_score // "N/A"' artifacts/final/summary.json)
   AUTHZ_COUNT=$(jq -r '[.findings[] | select(.tool=="authz-matrix")] | length' artifacts/final/summary.json)
   RATE_COUNT=$(jq -r '[.findings[] | select(.tool=="rate-limit-test")] | length' artifacts/final/summary.json)
+  BL_COUNT=$(jq -r '[.findings[] | select(.tool=="business-logic")] | length' artifacts/final/summary.json)
+  RACE_COUNT=$(jq -r '[.findings[] | select(.tool=="race-condition")] | length' artifacts/final/summary.json)
+  SURFACE_COUNT=$(jq -r '[.findings[] | select(.tool=="attack-surface")] | length' artifacts/final/summary.json)
 fi
 
-# Build tools summary line
-TOOLS_SUMMARY="🔍 ZAP: ${ZAP_COUNT}  |  ☢️ Nuclei: ${NUCLEI_COUNT}  |  🌐 Katana: ${KATANA_COUNT}  |  💥 ffuf: ${FFUF_COUNT}  |  📬 Newman: ${NEWMAN_COUNT}  |  🔐 AuthZ: ${AUTHZ_COUNT}  |  ⏱️ RateLimit: ${RATE_COUNT}"
+TOOLS_SUMMARY="🔍 ZAP: ${ZAP_COUNT}  |  ☢️ Nuclei: ${NUCLEI_COUNT}  |  🌐 Katana: ${KATANA_COUNT}  |  💥 ffuf: ${FFUF_COUNT}  |  📬 Newman: ${NEWMAN_COUNT}  |  🔐 AuthZ: ${AUTHZ_COUNT}  |  ⏱️ RateLimit: ${RATE_COUNT}  |  🧠 BizLogic: ${BL_COUNT}  |  🔄 Race: ${RACE_COUNT}  |  🗺️ Surface: ${SURFACE_COUNT}"
 
 # Fallback warning
 FALLBACK_NOTE=""

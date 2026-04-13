@@ -252,3 +252,76 @@ s3://<S3_BUCKET>/dast/<TIMESTAMP>/
     s3-upload.log
     slack.log
 ```
+
+---
+
+## Phase 3 — Business Logic Testing
+
+| Variable / Secret | Default | Description |
+|---|---|---|
+| `BL_API_ENDPOINTS` | `/api/orders,/api/checkout,/api/payment,/api/users/profile,/api/cart` | Comma-separated API paths to test for business logic flaws |
+| `USER_TOKEN` *(secret)* | — | Bearer token for authenticated business logic tests (same as Phase 2) |
+
+Tests performed:
+- Duplicate submission (idempotency check)
+- Negative value abuse (negative quantities/amounts)
+- Mass assignment (privileged field injection)
+- Workflow skipping (accessing later steps without completing prior ones)
+
+---
+
+## Phase 3 — Race Condition Testing
+
+| Variable | Default | Description |
+|---|---|---|
+| `RACE_CONCURRENCY` | `10` | Number of parallel requests per race condition test |
+| `RACE_ENDPOINTS` | `/api/orders,/api/checkout,/api/redeem,/api/vote,/api/like` | Comma-separated endpoints to test for race conditions |
+
+---
+
+## Phase 3 — Attack Surface Inventory
+
+No additional variables required. The attack surface script automatically reads from:
+- `artifacts/raw/katana/` — Katana crawl results
+- `artifacts/raw/ffuf/` — ffuf forced browsing results
+- `artifacts/raw/zap/zap-report.json` — ZAP scan results
+
+Produces `artifacts/raw/attack-surface/attack-surface.json` with:
+- All discovered routes
+- API endpoints
+- High-risk routes (admin, debug, upload, etc.)
+- Parameters discovered
+- Forms discovered
+
+---
+
+## Updated Artifact Structure in S3 (Phase 1 + Phase 2 + Phase 3)
+
+```
+s3://<S3_BUCKET>/dast/<TIMESTAMP>/
+  raw/
+    zap/                          zap-report.json/html/xml
+    nuclei/                       nuclei-report.json/txt
+    katana/                       <target>.txt
+    ffuf/                         <target>.json
+    newman/                       newman-report.json
+    authz/                        authz-matrix.json         (Phase 2)
+    rate-limit/                   rate-limit-results.json   (Phase 2)
+    business-logic/               bl-results.json           (Phase 3)
+    race-condition/               race-results.json         (Phase 3)
+    attack-surface/               attack-surface.json       (Phase 3)
+  final/
+    summary.json
+    summary.pdf
+  logs/
+    preflight.log
+    katana.log / ffuf.log / zap.log / nuclei.log
+    authz-matrix.log              (Phase 2)
+    rate-limit.log                (Phase 2)
+    regression-diff.log           (Phase 2)
+    business-logic.log            (Phase 3)
+    race-condition.log            (Phase 3)
+    attack-surface.log            (Phase 3)
+    normalize.log / posture.log / pdf-gen.log
+    s3-upload.log / slack.log
+```
