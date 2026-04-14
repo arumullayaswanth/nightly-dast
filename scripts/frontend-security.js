@@ -28,7 +28,7 @@
  *   AUTH_SUBMIT_SELECTOR    — CSS selector for submit button
  */
 
-const { chromium } = require("@playwright/test");
+const { chromium } = require("playwright");
 const https = require("https");
 const http = require("http");
 const fs = require("fs");
