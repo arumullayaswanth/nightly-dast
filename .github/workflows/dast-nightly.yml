@@ -3,7 +3,8 @@ name: Nightly DAST / Pentest Regression
 on:
   schedule:
     - cron: "0 2 * * *" # 02:00 UTC nightly
-  workflow_dispatch: # allow manual trigger
+  workflow_dispatch:
+    # allow manual trigger
 
 env:
   SCAN_TIMESTAMP: "" # set in job step
@@ -224,25 +225,51 @@ jobs:
           fi
 
       - name: OWASP ZAP authenticated scan
-        if: ${{ vars.AUTH_ENABLED == 'true' }}
+        if: ${{ vars.AUTH_ENABLED == 'true' || secrets.API_TOKEN != '' ||
+          secrets.USER_TOKEN != '' }}
         env:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN }}
         run: |
           set -euo pipefail
           FIRST_URL=$(echo "$TARGET_URLS" | tr ',' '\n' | head -1)
           mkdir -p artifacts/raw/zap artifacts/logs
           chmod 777 artifacts/raw/zap
 
+          # ── Resolve which token to use ────────────────────────────────────────
+          # Priority: API_TOKEN (direct Bearer) > USER_TOKEN > Playwright session
+          BEARER_TOKEN=""
+          if [ -n "${API_TOKEN:-}" ]; then
+            BEARER_TOKEN="$API_TOKEN"
+            echo "[INFO] Using API_TOKEN as Bearer token for authenticated ZAP scan."
+          elif [ -n "${USER_TOKEN:-}" ]; then
+            BEARER_TOKEN="$USER_TOKEN"
+            echo "[INFO] Using USER_TOKEN as Bearer token for authenticated ZAP scan."
+          elif [ -f /tmp/auth-token.txt ]; then
+            BEARER_TOKEN=$(cat /tmp/auth-token.txt | tr -d '[:space:]')
+            echo "[INFO] Using Playwright auth-token.txt for authenticated ZAP scan."
+          fi
+
+          # ── Write token to /tmp so zap-auth-setup.sh can read it ─────────────
+          if [ -n "$BEARER_TOKEN" ]; then
+            echo "$BEARER_TOKEN" > /tmp/auth-token.txt
+            echo "[INFO] Bearer token written to /tmp/auth-token.txt"
+          elif [ -f /tmp/zap-session.txt ]; then
+            echo "[INFO] No Bearer token — using Playwright session cookie."
+          else
+            echo "[WARN] No token or session found — authenticated scan will run without credentials."
+          fi
+
           # Build ZAP Automation Framework plan with real header injection
-          # This replaces the broken eval+$ZAP_REPLACE_HEADER approach
           bash scripts/zap-auth-setup.sh "$FIRST_URL" /tmp/zap-auth-plan.yaml \
             2>&1 | tee artifacts/logs/zap-auth-setup.log
 
           # Mount auth artifacts into container
           MOUNT_ARGS=""
-          [ -f /tmp/auth-token.txt ]        && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/auth-token.txt:/tmp/auth-token.txt:ro"
-          [ -f /tmp/zap-session.txt ]       && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/zap-session.txt:/tmp/zap-session.txt:ro"
-          [ -f /tmp/session-cookies.json ]  && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/session-cookies.json:/tmp/session-cookies.json:ro"
+          [ -f /tmp/auth-token.txt ]       && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/auth-token.txt:/tmp/auth-token.txt:ro"
+          [ -f /tmp/zap-session.txt ]      && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/zap-session.txt:/tmp/zap-session.txt:ro"
+          [ -f /tmp/session-cookies.json ] && MOUNT_ARGS="$MOUNT_ARGS -v /tmp/session-cookies.json:/tmp/session-cookies.json:ro"
 
           docker run --rm \
             -v "$(pwd)/artifacts/raw/zap:/zap/wrk:rw" \
@@ -257,7 +284,6 @@ jobs:
           echo "--- ZAP auth output files ---"
           ls -lh artifacts/raw/zap/ || echo "No ZAP auth output files produced"
 
-          # Validate authenticated report was produced
           if [ -f "artifacts/raw/zap/zap-auth-report.json" ]; then
             echo "[OK] zap-auth-report.json exists ($(wc -c < artifacts/raw/zap/zap-auth-report.json) bytes)"
           else
@@ -281,12 +307,14 @@ jobs:
 
       # ── Nuclei supplemental scan ──────────────────────────────────────────────
       - name: Update Nuclei templates
-        run: ~/go/bin/nuclei -update-templates -silent 2>&1 | tee artifacts/logs/nuclei-update.log || true
+        run: ~/go/bin/nuclei -update-templates -silent 2>&1 | tee
+          artifacts/logs/nuclei-update.log || true
 
       - name: Nuclei security regression scan
         env:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
-          NUCLEI_TAGS: ${{ vars.NUCLEI_TAGS || 'cve,ssrf,xss,sqli,rce,misconfig,exposure,headers,session' }}
+          NUCLEI_TAGS: ${{ vars.NUCLEI_TAGS ||
+            'cve,ssrf,xss,sqli,rce,misconfig,exposure,headers,session' }}
           NUCLEI_SEVERITY: ${{ vars.NUCLEI_SEVERITY || 'medium,high,critical' }}
           NUCLEI_RATE: ${{ vars.NUCLEI_RATE || '50' }}
         run: |
@@ -332,7 +360,7 @@ jobs:
       - name: Authorization matrix test
         env:
           TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
-          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN || secrets.API_TOKEN }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           USER_B_TOKEN: ${{ secrets.USER_B_TOKEN }}
           AUTHZ_ENDPOINTS: ${{ vars.AUTHZ_ENDPOINTS || '' }}
@@ -365,7 +393,7 @@ jobs:
       - name: Business logic test
         env:
           TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
-          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN || secrets.API_TOKEN }}
           BL_API_ENDPOINTS: ${{ vars.BL_API_ENDPOINTS || '' }}
           BL_OUTPUT: "artifacts/raw/business-logic/bl-results.json"
         run: |
@@ -379,7 +407,7 @@ jobs:
       - name: Race condition test
         env:
           TARGET_URL: ${{ vars.TARGET_URL || vars.TARGET_URLS }}
-          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN || secrets.API_TOKEN }}
           RACE_CONCURRENCY: ${{ vars.RACE_CONCURRENCY || '10' }}
           RACE_ENDPOINTS: ${{ vars.RACE_ENDPOINTS || '' }}
           RACE_OUTPUT: "artifacts/raw/race-condition/race-results.json"
@@ -471,7 +499,7 @@ jobs:
           UPLOAD_PATH: ${{ vars.UPLOAD_PATH || '/api/upload' }}
           UPLOAD_FIELD: ${{ vars.UPLOAD_FIELD || 'file' }}
           RETRIEVE_PATH: ${{ vars.RETRIEVE_PATH || '/uploads' }}
-          USER_TOKEN: ${{ secrets.USER_TOKEN }}
+          USER_TOKEN: ${{ secrets.USER_TOKEN || secrets.API_TOKEN }}
           UPLOAD_OUTPUT: "artifacts/raw/upload-abuse/upload-results.json"
         run: |
           set -euo pipefail
