@@ -165,7 +165,7 @@ fi
 TARGET_LIST=$(echo "$TARGET_URLS" | tr ',' '\n' | sed 's/^/• /' | tr '\n' '\n')
 
 # ── Build tool coverage line ──────────────────────────────────────────────────
-TOOLS_LINE="ZAP:${ZAP_COUNT} | Nuclei:${NUCLEI_COUNT} | Katana:${KATANA_COUNT} | ffuf:${FFUF_COUNT} | Newman:${NEWMAN_COUNT} | AuthZ:${AUTHZ_COUNT} | RateLimit:${RATE_COUNT} | BizLogic:${BL_COUNT} | Race:${RACE_COUNT} | Surface:${SURFACE_COUNT} | Upload:${UPLOAD_COUNT} | Frontend:${FRONTEND_COUNT}"
+TOOLS_LINE="🔍 ZAP:${ZAP_COUNT} | ☢️ Nuclei:${NUCLEI_COUNT} | 🕷️ Katana:${KATANA_COUNT} | 💥 ffuf:${FFUF_COUNT} | 📬 Newman:${NEWMAN_COUNT} | 🔐 AuthZ:${AUTHZ_COUNT} | ⏱️ RateLimit:${RATE_COUNT} | 🧠 BizLogic:${BL_COUNT} | 🔄 Race:${RACE_COUNT} | 🗺️ Surface:${SURFACE_COUNT} | 📎 Upload:${UPLOAD_COUNT} | 🌐 Frontend:${FRONTEND_COUNT}"
 
 # ── Build stage coverage status ───────────────────────────────────────────────
 stage_icon() {
@@ -246,7 +246,7 @@ PAYLOAD=$(jq -n \
                     { title: "Posture Score",      value: ($posture + "/100  |  Risk: " + $risk + "  |  Coverage: " + $coverage + "%"), short: false },
                     { title: "Regression",         value: ("Score: " + $regression + "/100  |  🆕 New: " + $new_count + "  |  ✅ Fixed: " + $fixed_count), short: false },
                     { title: "Scanned URL(s)",     value: $targets,     short: false },
-                    { title: "Severity Breakdown", value: ("🔴 Critical: " + $critical + "  🟠 High: " + $high + "  🟡 Medium: " + $medium + "  🟢 Low: " + $low + "  🔵 Info: " + $info + "  📊 Total: " + $total), short: false },
+                    { title: "Severity Breakdown", value: ("🔴 Critical: " + $critical + "   🟠 High: " + $high + "   🟡 Medium: " + $medium + "   🟢 Low: " + $low + "   🔵 Info: " + $info + "   📊 Total: " + $total), short: false },
                     { title: "Tool Coverage",      value: $tools,       short: false },
                     { title: "Stage Coverage",     value: $stages,      short: false },
                     { title: "S3 Artifacts",       value: (if $s3_path != "" then $s3_path else "N/A" end), short: false }
