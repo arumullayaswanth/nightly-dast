@@ -225,8 +225,7 @@ jobs:
           fi
 
       - name: OWASP ZAP authenticated scan
-        if: ${{ vars.AUTH_ENABLED == 'true' || secrets.API_TOKEN != '' ||
-          secrets.USER_TOKEN != '' }}
+        if: ${{ vars.AUTH_ENABLED == 'true' || vars.ZAP_AUTH_ENABLED == 'true' }}
         env:
           TARGET_URLS: ${{ vars.TARGET_URLS }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
